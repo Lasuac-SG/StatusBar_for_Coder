@@ -1,0 +1,61 @@
+export component MainWindow inherits Window {
+    in property <float> dpi-scale: 1.0;
+
+    always-on-top: true;
+    no-frame: true;
+    // 1. 最外层窗口彻底透明，交出背景色
+    background: transparent; 
+
+    // 2. 外层布局：负责控制悬浮岛与屏幕边缘的留白距离
+    HorizontalLayout {
+        // 调节这里的数值可以控制悬浮岛离屏幕边缘有多远
+        padding-top: 6px * root.dpi-scale;     // 距离屏幕顶部 6px
+        padding-bottom: 6px * root.dpi-scale;  // 距离最大化应用 6px
+        padding-left: 12px * root.dpi-scale;   // 距离屏幕左边缘 12px
+        padding-right: 12px * root.dpi-scale;  // 距离屏幕右边缘 12px
+
+        // 3. 真正的悬浮状态栏实体
+        Rectangle {
+            background: #1e1e1e;
+            border-radius: 8px * root.dpi-scale; // 增加现代化圆角
+            
+            // 可选：添加一点微弱的外阴影，增加悬浮立体感 (Slint 支持 drop-shadow)
+            drop-shadow-color: #00000040;
+            drop-shadow-blur: 4px * root.dpi-scale;
+            drop-shadow-offset-y: 2px * root.dpi-scale;
+
+            // 4. 内层布局：负责控制文字与状态栏边缘的距离
+            HorizontalLayout {
+                padding-left: 16px * root.dpi-scale;
+                padding-right: 16px * root.dpi-scale;
+
+                Text {
+                    width: 33%;
+                    text: "<- Left Zone";
+                    font-size: 14px * root.dpi-scale;
+                    color: #ff5555;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                }
+
+                Text {
+                    width: 34%;
+                    text: "Center Zone";
+                    font-size: 14px * root.dpi-scale;
+                    color: #50fa7b;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    width: 33%;
+                    text: "Right Zone ->";
+                    font-size: 14px * root.dpi-scale;
+                    color: #8be9fd;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+    }
+}
