@@ -22,6 +22,7 @@ set(SRC_FILES
     src/platform/display.cpp
     src/platform/appbar_proxy.cpp
     src/core/window_manager.cpp
+    ui/slint_window_adapter.cpp
 )
 
 # 3. 定义可执行文件

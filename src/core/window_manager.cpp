@@ -1,10 +1,12 @@
 #include "src/core/window_manager.h"
 #include "src/platform/appbar_proxy.h"
 #include <cmath>
+#include <utility> // for std::move
 
 namespace Core {
-    WindowManager::WindowManager() 
-        : m_uiHandle(MainWindow::create()) {
+    // 构造函数：接收传入的 UI 适配器，并使用 std::move 将其移动赋值给成员变量。
+    WindowManager::WindowManager(std::unique_ptr<IWindowAdapter> uiAdapter) 
+        : m_uiAdapter(std::move(uiAdapter)) {
     }
 
     WindowManager::~WindowManager() {
@@ -15,18 +17,21 @@ namespace Core {
         m_physicalWidth = static_cast<uint32_t>(screenWidth);
         m_physicalHeight = static_cast<uint32_t>(std::ceil(m_logicalHeight * dpi / 96.0));
         
-        // [核心新增]: 计算出精准的浮点型倍率 (例如 1.5)，并通过底层桥梁传给 Slint 前端
         float scaleFactor = static_cast<float>(dpi) / 96.0f;
-        m_uiHandle->set_dpi_scale(scaleFactor);
+        
+        // 核心新增：全部改为通过抽象接口与前端通信，不再调用具体的 slint api
+        m_uiAdapter->SetDpiScale(scaleFactor);
         
         Platform::AppBarProxy::Initialize(m_physicalWidth, m_physicalHeight);
 
-        m_uiHandle->window().set_size(slint::PhysicalSize({ m_physicalWidth, m_physicalHeight }));
-        m_uiHandle->window().set_position(slint::PhysicalPosition({ 0, 0 }));
+        m_uiAdapter->SetSize(m_physicalWidth, m_physicalHeight);
+        m_uiAdapter->SetPosition(0, 0);
     }
 
     void WindowManager::Show() {
-        m_uiHandle->show(); 
-        m_uiHandle->run();
+        // 调用接口的显示与运行方法
+        m_uiAdapter->Show(); 
+        m_uiAdapter->HideFromAltTabAndTaskbar();
+        m_uiAdapter->Run();
     }
 }
