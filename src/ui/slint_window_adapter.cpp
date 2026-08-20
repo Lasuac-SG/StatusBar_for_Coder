@@ -1,14 +1,49 @@
-#include "ui/slint_window_adapter.h"
-#include <iostream>
+#include "src/ui/slint_window_adapter.h"
+#include "src/ui/viewmodels/widget_registry.h"
+#include "src/core/config_manager.h"
 #include <string_view> // [新增] C++17 字符串视图
+#include <vector>
+#include <string>
 
 namespace UI {
-    SlintWindowAdapter::SlintWindowAdapter() : m_uiHandle(MainWindow::create()) {}
+    SlintWindowAdapter::SlintWindowAdapter() 
+        : m_uiHandle(MainWindow::create()) {
+        
+        // 1. 初始化并加载本地持久化配置
+        auto& configMgr = Core::ConfigManager::GetInstance();
+        configMgr.Load();
+        std::vector<std::string> activeWidgets = configMgr.GetActiveWidgets();
+
+        // 2. 将数组转换为 Slint 可识别的高性能内存模型，并注射给前端
+        auto slintModel = std::make_shared<slint::VectorModel<slint::SharedString>>();
+        for (const auto& w : activeWidgets) {
+            slintModel->push_back(slint::SharedString(w));
+        }
+        m_uiHandle->global<LayoutConfig>().set_active_widgets(slintModel);
+
+        // 3. 驱动注册表工厂，实例化对应数量的 ViewModel 供 C++ 后台逻辑使用
+        auto& registry = WidgetRegistry::GetInstance();
+        for (const auto& widgetName : activeWidgets) {
+            if (auto widget = registry.Create(widgetName, m_uiHandle)) {
+                m_viewModels.push_back(std::move(widget));
+            }
+        }
+
+        // 4. 启动统一脉冲定时器
+        m_updateTimer.start(slint::TimerMode::Repeated, std::chrono::seconds(1), [this]() {
+            for (auto& vm : m_viewModels) {
+                vm->Update();
+            }
+        });    
+    }    
+   
+
     void SlintWindowAdapter::SetDpiScale(float scale) { m_uiHandle->set_dpi_scale(scale); }
     void SlintWindowAdapter::SetSize(uint32_t width, uint32_t height) { m_uiHandle->window().set_size(slint::PhysicalSize({ width, height })); }
     void SlintWindowAdapter::SetPosition(int x, int y) { m_uiHandle->window().set_position(slint::PhysicalPosition({ x, y })); }
     void SlintWindowAdapter::Show() { m_uiHandle->show(); }
     void SlintWindowAdapter::Run() { m_uiHandle->run(); }
+    void SlintWindowAdapter::Quit() { slint::quit_event_loop();}
 
     static BOOL CALLBACK EnumThreadWndProc(HWND hwnd, LPARAM lParam) {
         HWND* pRet = reinterpret_cast<HWND*>(lParam);

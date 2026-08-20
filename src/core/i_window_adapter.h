@@ -24,5 +24,7 @@ namespace Core {
         virtual void Run() = 0;
 
         virtual void HideFromAltTabAndTaskbar() = 0;
+
+        virtual void Quit() = 0;
     };
 }

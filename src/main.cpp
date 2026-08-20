@@ -1,12 +1,12 @@
 #define WIN32_LEAN_AND_MEAN 
 #define NOMINMAX 
 
+#include "src/ui/viewmodels/registry_setup.h"
 #include "src/core/window_manager.h"
-#include "ui/slint_window_adapter.h"
+#include "src/ui/slint_window_adapter.h"
 #include "src/platform/display.h"
 #include <windows.h>
 #include <iostream>
-#include <cstdlib> // 替换旧的 <stdlib.h>
 
 #ifndef NDEBUG
 void SetupDebugConsole() {
@@ -24,7 +24,8 @@ int main() {
 #ifndef NDEBUG
     SetupDebugConsole(); // 发布时这段代码会自动消失，无冗余开销
 #endif
-
+    
+    UI::RegisterAllWidgets();
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     _putenv("SLINT_SCALE_FACTOR=1"); 
 

@@ -1,0 +1,102 @@
+// 1. 全局布局常量：管理整个状态栏的数学规则与物理参数
+export global LayoutConfig {
+    // 接收来自 C++ 底层的动态缩放率
+    in-out property <float> dpi-scale: 1.0;
+    
+    // 100% 缩放下的基准尺寸 (Base Dimensions)
+    in property <length> base-cell-width: 40px;
+    in property <length> base-cell-spacing: 8px;
+
+    // 动态计算出的真实物理尺寸 (Physical Dimensions)
+    out property <length> cell-width: base-cell-width * dpi-scale;
+    out property <length> cell-spacing: base-cell-spacing * dpi-scale;
+
+    in property <[string]> active-widgets: [];
+}
+
+export global ClockAdapter {
+    // 声明一个字符串类型的输入属性，等待 C++ 赋值
+    in property <string> time-text: "--:--"; 
+}
+
+// 2. 基础组件容器：所有具体小组件的“基类”
+export component WidgetContainer inherits Rectangle {
+    // 接口：外部声明该组件需要占用的单位格数量，默认为 1
+    in property <int> span: 1;
+
+    // [核心架构]：严格执行物理宽度计算公式 Width = N * U + (N - 1) * G
+    // Math.max 确保当 span 为 1 时，不会减去负数的间距
+    width: (self.span * LayoutConfig.cell-width) + (Math.max(0, self.span - 1) * LayoutConfig.cell-spacing);
+    
+    // 统一的视觉规范：所有小组件共享同一种底色、圆角
+    background: #2a2a2a;
+    border-radius: 6px * LayoutConfig.dpi-scale;
+    
+    // 强制裁剪：任何超出物理边界的内部元素都会被无情切断，防止撑破网格引发全局重排
+    clip: true; 
+
+    // 占位符：允许子类将特定的 UI (如 Text, Image) 插入到这个容器内部
+    @children
+}
+
+// 3. 示例组件 A：系统时钟（占用 2 个单位格）
+export component ClockWidget inherits WidgetContainer {
+    span: 2; 
+    
+    Text {
+        text: ClockAdapter.time-text;
+        
+        color: #50fa7b;
+        font-size: 14px * LayoutConfig.dpi-scale;
+        font-weight: 700;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+// 4. 示例组件 B：CPU 监控（占用 1 个单位格）
+
+
+// 5. 组装层：主状态栏窗口
+export component MainWindow inherits Window {
+    // 接收 C++ 传入的 dpi-scale，并同步给全局单例
+    in property <float> dpi-scale: 1.0;
+    changed dpi-scale => {
+        LayoutConfig.dpi-scale = root.dpi-scale;
+    }
+
+    always-on-top: true;
+    no-frame: true;
+    background: transparent; 
+
+    HorizontalLayout {
+        padding-top: 6px * root.dpi-scale;
+        padding-bottom: 6px * root.dpi-scale;
+        padding-left: 12px * root.dpi-scale;
+        padding-right: 12px * root.dpi-scale;
+
+        Rectangle {
+            background: #1e1e1e;
+            border-radius: 8px * root.dpi-scale;
+            drop-shadow-color: #00000040;
+            drop-shadow-blur: 4px * root.dpi-scale;
+            drop-shadow-offset-y: 2px * root.dpi-scale;
+
+            // 真正的网格对齐控制层
+            HorizontalLayout {
+                padding: 8px * root.dpi-scale; // 状态栏外边距
+                spacing: LayoutConfig.cell-spacing; // 组件之间的标准间距
+                alignment: start; // 所有组件靠左紧凑排列
+
+                // 遍历 C++ 传进来的数组，动态实例化组件
+                for widget-name in LayoutConfig.active-widgets: HorizontalLayout {
+                    // 使用隐式布局包裹，取消间距，防止破坏离散网格公式
+                    spacing: 0px; 
+                    padding: 0px;
+                    
+                    if widget-name == "Clock" : ClockWidget {}
+                    // 未来新增组件只需在此加一行即可
+                    // if widget-name == "Cpu" : CpuWidget {} 
+                }            }
+        }
+    }
+}

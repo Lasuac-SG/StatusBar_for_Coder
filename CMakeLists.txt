@@ -22,14 +22,19 @@ set(SRC_FILES
     src/platform/display.cpp
     src/platform/appbar_proxy.cpp
     src/core/window_manager.cpp
-    ui/slint_window_adapter.cpp
+    src/ui/slint_window_adapter.cpp
+    src/platform/tray_icon.cpp
+    src/platform/app_resource.rc
+    src/ui/viewmodels/clock_view_model.cpp
+    src/ui/viewmodels/registry_setup.cpp
+    src/core/config_manager.cpp
 )
 
 # 3. 定义可执行文件
 add_executable(${PROJECT_NAME} WIN32 ${SRC_FILES})
 
 # 4. 引入 Slint UI 文件
-slint_target_sources(${PROJECT_NAME} ui/main.slint)
+slint_target_sources(${PROJECT_NAME} src/ui/main.slint)
 
 # 5. 链接库依赖：这里新增了 Windows 的 Shell32 (AppBar 需要) 和 User32 (FindWindow 需要)
 target_link_libraries(${PROJECT_NAME} PRIVATE 
@@ -40,6 +45,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     comctl32
 )
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${PROJECT_NAME} PRIVATE third_party)
 
 # 6. Windows DLL 拷贝 (保持你在上一步加的代码不变)
 if(WIN32)

@@ -24,6 +24,11 @@ namespace Core {
         
         Platform::AppBarProxy::Initialize(m_physicalWidth, m_physicalHeight);
 
+        m_trayIcon.SetQuitCallback([this]() {
+            this->m_uiAdapter->Quit();
+        });
+        m_trayIcon.Initialize();
+
         m_uiAdapter->SetSize(m_physicalWidth, m_physicalHeight);
         m_uiAdapter->SetPosition(0, 0);
     }
