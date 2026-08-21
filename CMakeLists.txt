@@ -1,58 +1,40 @@
 cmake_minimum_required(VERSION 3.21)
-project(StatusBar_for_Coder VERSION 1.0.0 LANGUAGES CXX)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-# 强制使用 C++20，保证现代 C++ 特性的可用性
+project(StatusBar_for_Coder)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 1. 自动下载并引入 Slint (沿用 release/1 标签)
-include(FetchContent)
-FetchContent_Declare(
-    Slint
-    GIT_REPOSITORY https://github.com/slint-ui/slint.git
-    GIT_TAG release/1 
-    SOURCE_SUBDIR api/cpp
-)
-FetchContent_MakeAvailable(Slint)
+# 开启 Qt 自动化编译工具
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
 
+# 查找 Qt6 组件
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick)
 
-set(SRC_FILES
-    src/main.cpp
-    src/platform/display.cpp
-    src/platform/appbar_proxy.cpp
-    src/core/window_manager.cpp
-    src/ui/slint_window_adapter.cpp
-    src/platform/tray_icon.cpp
-    src/platform/app_resource.rc
-    src/ui/viewmodels/clock_view_model.cpp
-    src/ui/viewmodels/registry_setup.cpp
-    src/core/config_manager.cpp
+# 收集所有 C++ 源文件与头文件
+file(GLOB_RECURSE SRC_FILES "src/*.cpp" "src/*.h")
+set(RC_FILES "src/platform/app_resource.rc")
+
+# 1. 声明可执行文件目标 (必须放在 target_* 指令的最前面)
+add_executable(${PROJECT_NAME} WIN32 ${SRC_FILES} ${RC_FILES} resources.qrc)
+
+# 2. 配置头文件包含目录
+target_include_directories(${PROJECT_NAME} PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party  # 让编译器能找到 nlohmann/json.hpp
 )
 
-# 3. 定义可执行文件
-add_executable(${PROJECT_NAME} WIN32 ${SRC_FILES})
-
-# 4. 引入 Slint UI 文件
-slint_target_sources(${PROJECT_NAME} src/ui/main.slint)
-
-# 5. 链接库依赖：这里新增了 Windows 的 Shell32 (AppBar 需要) 和 User32 (FindWindow 需要)
+# 3. 链接所需的动态/静态库
 target_link_libraries(${PROJECT_NAME} PRIVATE 
-    Slint::Slint 
+    # Qt6 组件
+    Qt6::Core 
+    Qt6::Gui 
+    Qt6::Qml 
+    Qt6::Quick
+    # Windows 底层 API 核心库 (系统托盘、AppBar 所需)
     Shell32 
-    User32
-    gdi32
-    comctl32
+    User32 
+    Gdi32
 )
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(${PROJECT_NAME} PRIVATE third_party)
-
-# 6. Windows DLL 拷贝 (保持你在上一步加的代码不变)
-if(WIN32)
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_RUNTIME_DLLS:${PROJECT_NAME}>
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>
-        COMMAND_EXPAND_LISTS
-    )
-endif()
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -3,19 +3,20 @@
 #include <vector>
 
 namespace Core {
+    // [新增]：结构化的配置文件基元
+    struct WidgetConfig {
+        std::string name;
+        int slot; // 记录组件停留在哪个网格上
+    };
+
     class ConfigManager {
     public:
-        // 全局单例
         static ConfigManager& GetInstance();
-        
-        // 从磁盘加载配置
         void Load();
-        
-        // 序列化并保存到磁盘
         void Save();
         
-        // 获取当前激活的组件列表
-        std::vector<std::string> GetActiveWidgets() const;
+        std::vector<WidgetConfig> GetActiveWidgets() const;
+        void SetActiveWidgets(const std::vector<WidgetConfig>& widgets);
 
     private:
         ConfigManager() = default;
@@ -23,7 +24,6 @@ namespace Core {
         ConfigManager(const ConfigManager&) = delete;
         ConfigManager& operator=(const ConfigManager&) = delete;
 
-        // 默认配置（如果文件不存在或为空时生效）
-        std::vector<std::string> m_activeWidgets = {"Clock", "Clock"}; 
+        std::vector<WidgetConfig> m_activeWidgets; 
     };
 }

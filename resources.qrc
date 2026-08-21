@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/">
+        <file>src/ui/qml/main.qml</file>
+        <file>src/ui/qml/ClockWidget.qml</file>
+    </qresource>
+</RCC>

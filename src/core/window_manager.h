@@ -20,7 +20,7 @@ namespace Core {
         // 核心层现在只持有一个抽象接口的指针，对 Slint 一无所知。
         std::unique_ptr<IWindowAdapter> m_uiAdapter;
         Platform::TrayIcon m_trayIcon;
-        const uint32_t m_logicalHeight = 48; 
+        const uint32_t m_logicalHeight = 40; 
         uint32_t m_physicalWidth = 0;
         uint32_t m_physicalHeight = 0;
     };

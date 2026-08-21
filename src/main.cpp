@@ -1,47 +1,35 @@
-#define WIN32_LEAN_AND_MEAN 
-#define NOMINMAX 
-
-#include "src/ui/viewmodels/registry_setup.h"
 #include "src/core/window_manager.h"
-#include "src/ui/slint_window_adapter.h"
+#include "src/ui/qt_window_adapter.h"
+#include "src/ui/viewmodels/registry_setup.h"
 #include "src/platform/display.h"
-#include <windows.h>
 #include <iostream>
+#include <memory>
 
-#ifndef NDEBUG
-void SetupDebugConsole() {
-    AllocConsole();
-    FILE* fp;
-    freopen_s(&fp, "CONOUT$", "w", stdout);
-    freopen_s(&fp, "CONOUT$", "w", stderr);
-    freopen_s(&fp, "CONIN$", "r", stdin);
-    SetConsoleOutputCP(CP_UTF8); 
-    std::cout << "[System] 调试控制台已挂载 (Debug Build)。" << std::endl;
-}
-#endif
+int main(int argc, char** argv) {
+    try {
+        // 1. 注册所有小组件图纸
+        UI::RegisterAllWidgets();
 
-int main() {
-#ifndef NDEBUG
-    SetupDebugConsole(); // 发布时这段代码会自动消失，无冗余开销
-#endif
-    
-    UI::RegisterAllWidgets();
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    _putenv("SLINT_SCALE_FACTOR=1"); 
+        // 2. 实例化 Qt 前端适配器 (必须传入 argc, argv)
+        auto qtAdapter = std::make_unique<UI::QtWindowAdapter>(argc, argv);
 
-    auto uiAdapter = std::make_unique<UI::SlintWindowAdapter>();
-    Core::WindowManager windowManager(std::move(uiAdapter));
+        // 3. 依赖注入：将 Qt 适配器交给核心层的 WindowManager 接管
+        Core::WindowManager windowManager(std::move(qtAdapter));
 
-    int screenWidth = Platform::Display::GetPrimaryScreenWidth();
-    uint32_t dpi = Platform::Display::GetSystemDpi();
+        // 4. 获取物理屏幕信息
+        int screenWidth = Platform::Display::GetPrimaryScreenWidth();
+        uint32_t systemDpi = Platform::Display::GetSystemDpi();
 
-#ifndef NDEBUG
-    std::cout << "[Info] 物理屏幕宽度: " << screenWidth << " px" << std::endl;
-    std::cout << "[Info] 当前系统 DPI: " << dpi << std::endl;
-#endif
+        // 5. 核心层统一调度：驻留屏幕边缘、生成托盘图标、调整缩放
+        windowManager.DockToTop(screenWidth, systemDpi);
 
-    windowManager.DockToTop(screenWidth, dpi);
-    windowManager.Show();
+        // 6. 核心层发号施令，正式启动前端事件循环
+        windowManager.Show();
+
+    } catch (const std::exception& e) {
+        std::cerr << "[Fatal Error] " << e.what() << std::endl;
+        return 1;
+    }
 
     return 0;
 }

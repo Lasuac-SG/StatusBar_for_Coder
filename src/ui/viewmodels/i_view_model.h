@@ -1,11 +1,13 @@
 #pragma once
+#include <string>
 
 namespace UI {
     class IViewModel {
     public:
         virtual ~IViewModel() = default;
-        
-        // 只有 Update 被保留为契约
         virtual void Update() = 0; 
+        virtual int GetSpan() const = 0; 
+        
+        virtual std::string GetName() const = 0; 
     };
 }

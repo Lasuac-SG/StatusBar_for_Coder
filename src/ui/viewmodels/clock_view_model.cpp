@@ -1,15 +1,10 @@
 #include "src/ui/viewmodels/clock_view_model.h"
-#include <chrono>
-#include "src/ui/viewmodels/clock_view_model.h"
+#include "src/ui/clock_adapter.h" // 引入上一步新建的 Qt Adapter
 #include <chrono>
 #include <ctime>
-#include <cstdio>
 
 namespace UI {
-    // 构造函数初始化列表直接对 m_uiHandle 进行赋值拷贝
-    ClockViewModel::ClockViewModel(const slint::ComponentHandle<MainWindow>& uiHandle) 
-        : m_uiHandle(uiHandle) {
-        // 构造完成时立刻执行一次更新，避免初始启动时的 "--:--" 闪烁
+    ClockViewModel::ClockViewModel() {
         Update(); 
     }
 
@@ -21,9 +16,9 @@ namespace UI {
         localtime_s(&localTime, &currentTime);
 
         char timeBuffer[16];
-        std::strftime(timeBuffer, sizeof(timeBuffer), "%H:%M:%S", &localTime);
+        std::strftime(timeBuffer, sizeof(timeBuffer), "%H:%M", &localTime);
 
-        // 注入数据到前端
-        m_uiHandle->global<ClockAdapter>().set_time_text(slint::SharedString(timeBuffer));
+        // 通过 Qt 单例适配器发送数据，彻底与 UI 窗口解耦
+        ClockAdapter::GetInstance().setTimeText(QString(timeBuffer));
     }
 }

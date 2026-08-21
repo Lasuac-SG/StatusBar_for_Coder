@@ -12,38 +12,58 @@ namespace Core {
     }
 
     void ConfigManager::Load() {
+        m_activeWidgets.clear();
         std::ifstream file("config.json");
+        
         if (file.is_open()) {
             try {
                 json j;
-                file >> j; // 解析 JSON
+                file >> j; 
                 
-                // 防御性编程：确保字段存在且类型为数组
-                if (j.contains("active_widgets") && j["active_widgets"].is_array()) {
-                    m_activeWidgets = j["active_widgets"].get<std::vector<std::string>>();
+                // [架构升级]：解析包含槽位坐标的对象数组
+                if (j.contains("widgets") && j["widgets"].is_array()) {
+                    for (const auto& item : j["widgets"]) {
+                        if (item.contains("name") && item.contains("slot")) {
+                            m_activeWidgets.push_back({
+                                item["name"].get<std::string>(),
+                                item["slot"].get<int>()
+                            });
+                        }
+                    }
                 }
             } catch (const std::exception& e) {
-                std::cerr << "[Error] config.json 解析失败，将使用默认配置: " << e.what() << std::endl;
+                std::cerr << "[Error] JSON 解析失败，格式可能不兼容: " << e.what() << std::endl;
             }
-        } else {
-            // 文件不存在，自动生成一份标准配置
-            std::cout << "[Info] 未发现 config.json，正在生成默认配置文件。" << std::endl;
+        } 
+        
+        // 如果文件不存在或旧版格式解析失败，启用默认分布
+        if (m_activeWidgets.empty()) {
+            // 默认放两个时钟，分别在第 0 格和第 4 格
+            m_activeWidgets = {{"Clock", 0}, {"Clock", 4}};
             Save();
         }
     }
 
     void ConfigManager::Save() {
         json j;
-        j["active_widgets"] = m_activeWidgets;
+        j["widgets"] = json::array();
+        
+        for (const auto& w : m_activeWidgets) {
+            j["widgets"].push_back({{"name", w.name}, {"slot", w.slot}});
+        }
         
         std::ofstream file("config.json");
         if (file.is_open()) {
-            // dump(4) 表示以 4 个空格的缩进进行美化输出
             file << j.dump(4);
         }
     }
 
-    std::vector<std::string> ConfigManager::GetActiveWidgets() const {
+    std::vector<WidgetConfig> ConfigManager::GetActiveWidgets() const {
         return m_activeWidgets;
+    }
+
+    void ConfigManager::SetActiveWidgets(const std::vector<WidgetConfig>& widgets) {
+        m_activeWidgets = widgets;
+        Save();
     }
 }
