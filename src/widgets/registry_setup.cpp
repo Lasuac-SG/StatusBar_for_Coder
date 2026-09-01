@@ -1,7 +1,7 @@
-#include "src/widgets/registry_setup.h"
-#include "src/widgets/widget_registry.h"
-#include "src/widgets/clock/clock_view_model.h"
-#include "src/widgets/cpu/cpu_view_model.h"
+#include "widgets/registry_setup.h"
+#include "widgets/widget_registry.h"
+#include "widgets/clock/clock_view_model.h"
+#include "widgets/cpu/cpu_view_model.h"
 
 namespace Widgets {
     void RegisterAllWidgets() {

@@ -1,7 +1,7 @@
-#include "src/core/window_manager.h"
-#include "src/ui/qt_window_adapter.h"
-#include "src/widgets/registry_setup.h"
-#include "src/platform/display.h"
+#include "core/window_manager.h"
+#include "ui/qt_window_adapter.h"
+#include "widgets/registry_setup.h"
+#include "platform/display.h"
 #include <iostream>
 #include <memory>
 

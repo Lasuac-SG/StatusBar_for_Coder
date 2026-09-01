@@ -1,5 +1,5 @@
-#include "src/core/window_manager.h"
-#include "src/platform/appbar_proxy.h"
+#include "core/window_manager.h"
+#include "platform/appbar_proxy.h"
 #include <cmath>
 #include <utility>
 

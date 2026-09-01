@@ -1,33 +1,55 @@
 cmake_minimum_required(VERSION 3.21)
-project(StatusBar_for_Coder)
+project(StatusBar_for_Coder VERSION 0.2.0 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick)
+qt_standard_project_setup(REQUIRES 6.8)
+include(CTest)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick)
+if(BUILD_TESTING)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
+endif()
 
-file(GLOB_RECURSE SRC_FILES "src/*.cpp" "src/*.h")
-set(RC_FILES "src/platform/app_resource.rc")
-
-add_executable(${PROJECT_NAME} ${SRC_FILES} ${RC_FILES} resources.qrc)
-
-target_include_directories(${PROJECT_NAME} PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+add_library(statusbar_core STATIC)
+target_sources(statusbar_core PRIVATE
+    src/core/config_manager.cpp
+    src/core/window_manager.cpp
+    src/platform/appbar_proxy.cpp
+    src/platform/display.cpp
+    src/platform/tray_icon.cpp
+    src/ui/widget_model.cpp
+    src/widgets/clock/clock_adapter.h
+    src/widgets/clock/clock_view_model.cpp
+    src/widgets/cpu/cpu_adapter.cpp
+    src/widgets/registry_setup.cpp
+)
+target_link_libraries(statusbar_core PUBLIC Qt6::Core)
+target_include_directories(statusbar_core
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
+    SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE 
-    Qt6::Core 
-    Qt6::Gui 
-    Qt6::Qml 
-    Qt6::Quick
-    Shell32 
-    User32 
-    Gdi32
-    Powrprof
-    Pdh
+qt_add_executable(StatusBar_for_Coder WIN32)
+target_sources(StatusBar_for_Coder PRIVATE
+    src/main.cpp
+    src/platform/app_resource.rc
+    src/ui/qt_window_adapter.cpp
+    resources.qrc
 )
+target_link_libraries(StatusBar_for_Coder PRIVATE
+    statusbar_core Qt6::Gui Qt6::Qml Qt6::Quick Shell32 User32 Pdh Advapi32)
+
+if(MSVC)
+    target_compile_options(statusbar_core PRIVATE /W4 /permissive-)
+    target_compile_options(StatusBar_for_Coder PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(statusbar_core PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(StatusBar_for_Coder PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

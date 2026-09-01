@@ -2,7 +2,7 @@
 #include <QAbstractListModel>
 #include <vector>
 #include <memory>
-#include "src/widgets/i_widget_view_model.h"
+#include "widgets/i_widget_view_model.h"
 
 namespace UI {
     struct WidgetInstance {

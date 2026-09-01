@@ -1,6 +1,6 @@
 #pragma once
-#include "src/core/i_window_adapter.h"
-#include "src/ui/widget_model.h"
+#include "core/i_window_adapter.h"
+#include "ui/widget_model.h"
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QTimer>

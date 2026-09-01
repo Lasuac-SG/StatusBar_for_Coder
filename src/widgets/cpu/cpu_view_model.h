@@ -1,6 +1,6 @@
 #pragma once
-#include "src/widgets/i_widget_view_model.h"
-#include "src/widgets/cpu/cpu_adapter.h"
+#include "widgets/i_widget_view_model.h"
+#include "widgets/cpu/cpu_adapter.h"
 
 namespace Widgets {
     class CpuViewModel : public IWidgetViewModel {

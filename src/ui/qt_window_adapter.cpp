@@ -1,7 +1,7 @@
-#include "src/ui/qt_window_adapter.h"
-#include "src/core/window_manager.h"
-#include "src/widgets/clock/clock_adapter.h"
-#include "src/widgets/cpu/cpu_adapter.h"
+#include "ui/qt_window_adapter.h"
+#include "core/window_manager.h"
+#include "widgets/clock/clock_adapter.h"
+#include "widgets/cpu/cpu_adapter.h"
 #include <QQmlContext>
 #include <QtQml>
 #include <QFont>

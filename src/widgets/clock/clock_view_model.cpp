@@ -1,5 +1,5 @@
-#include "src/widgets/clock/clock_view_model.h"
-#include "src/widgets/clock/clock_adapter.h"
+#include "widgets/clock/clock_view_model.h"
+#include "widgets/clock/clock_adapter.h"
 #include <chrono>
 #include <ctime>
 

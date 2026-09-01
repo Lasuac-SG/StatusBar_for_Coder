@@ -1,6 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
-#include "src/platform/tray_icon.h"
-#include "src/platform/resource.h"
+#include "platform/tray_icon.h"
+#include "platform/resource.h"
 #include <shellapi.h>
 
 namespace Platform {

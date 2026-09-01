@@ -1,4 +1,4 @@
-#include "src/widgets/cpu/cpu_adapter.h"
+#include "widgets/cpu/cpu_adapter.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN

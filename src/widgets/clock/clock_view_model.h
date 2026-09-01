@@ -1,5 +1,5 @@
 #pragma once
-#include "src/widgets/i_widget_view_model.h"
+#include "widgets/i_widget_view_model.h"
 
 namespace Widgets {
     class ClockViewModel : public IWidgetViewModel {

@@ -1,6 +1,6 @@
-#include "src/ui/widget_model.h"
-#include "src/core/config_manager.h"
-#include "src/widgets/widget_registry.h"
+#include "ui/widget_model.h"
+#include "core/config_manager.h"
+#include "widgets/widget_registry.h"
 #include <cmath>
 #include <algorithm>
 

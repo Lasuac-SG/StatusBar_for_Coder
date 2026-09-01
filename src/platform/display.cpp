@@ -1,4 +1,4 @@
-#include "src/platform/display.h"
+#include "platform/display.h"
 #include <windows.h>
 
 namespace Platform {

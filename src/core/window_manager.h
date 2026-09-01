@@ -1,6 +1,6 @@
 #pragma once
-#include "src/core/i_window_adapter.h"
-#include "src/platform/tray_icon.h"
+#include "core/i_window_adapter.h"
+#include "platform/tray_icon.h"
 #include <cstdint>
 #include <memory>
 

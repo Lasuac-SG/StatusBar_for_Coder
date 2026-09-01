@@ -1,4 +1,4 @@
-#include "src/platform/appbar_proxy.h"
+#include "platform/appbar_proxy.h"
 #include <shellapi.h>
 
 namespace Platform {
