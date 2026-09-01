@@ -26,11 +26,12 @@ target_sources(statusbar_core PRIVATE
     src/widgets/cpu/cpu_adapter.cpp
     src/widgets/registry_setup.cpp
 )
-target_link_libraries(statusbar_core PUBLIC Qt6::Core)
-target_include_directories(statusbar_core
-    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
-    SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+target_link_libraries(statusbar_core
+    PUBLIC Qt6::Core
+    PRIVATE Shell32 User32 Pdh Advapi32
 )
+target_include_directories(statusbar_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(statusbar_core SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 qt_add_executable(StatusBar_for_Coder WIN32)
 target_sources(StatusBar_for_Coder PRIVATE
@@ -40,7 +41,7 @@ target_sources(StatusBar_for_Coder PRIVATE
     resources.qrc
 )
 target_link_libraries(StatusBar_for_Coder PRIVATE
-    statusbar_core Qt6::Gui Qt6::Qml Qt6::Quick Shell32 User32 Pdh Advapi32)
+    statusbar_core Qt6::Gui Qt6::Qml Qt6::Quick)
 
 if(MSVC)
     target_compile_options(statusbar_core PRIVATE /W4 /permissive-)
