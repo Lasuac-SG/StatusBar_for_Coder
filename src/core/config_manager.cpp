@@ -19,8 +19,6 @@ namespace Core {
             try {
                 json j;
                 file >> j; 
-                
-                // [架构升级]：解析包含槽位坐标的对象数组
                 if (j.contains("widgets") && j["widgets"].is_array()) {
                     for (const auto& item : j["widgets"]) {
                         if (item.contains("name") && item.contains("slot")) {
@@ -32,14 +30,12 @@ namespace Core {
                     }
                 }
             } catch (const std::exception& e) {
-                std::cerr << "[Error] JSON 解析失败，格式可能不兼容: " << e.what() << std::endl;
+                std::cerr << "[ConfigManager] JSON 解析失败: " << e.what() << std::endl;
             }
         } 
         
-        // 如果文件不存在或旧版格式解析失败，启用默认分布
         if (m_activeWidgets.empty()) {
-            // 默认放两个时钟，分别在第 0 格和第 4 格
-            m_activeWidgets = {{"Clock", 0}, {"Clock", 4}};
+            m_activeWidgets = {{"Clock", 0}, {"Cpu", 4}};
             Save();
         }
     }
@@ -47,11 +43,9 @@ namespace Core {
     void ConfigManager::Save() {
         json j;
         j["widgets"] = json::array();
-        
         for (const auto& w : m_activeWidgets) {
             j["widgets"].push_back({{"name", w.name}, {"slot", w.slot}});
         }
-        
         std::ofstream file("config.json");
         if (file.is_open()) {
             file << j.dump(4);

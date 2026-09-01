@@ -1,10 +1,11 @@
 #include "src/ui/widget_model.h"
-#include "src/ui/viewmodels/widget_registry.h"
+#include "src/core/config_manager.h"
+#include "src/widgets/widget_registry.h"
 #include <cmath>
 #include <algorithm>
 
 namespace UI {
-    WidgetModel::WidgetModel(QObject* parent) : QAbstractListModel(parent), m_maxSlots(0) {}
+    WidgetModel::WidgetModel(QObject* parent) : QAbstractListModel(parent) {}
 
     int WidgetModel::rowCount(const QModelIndex& parent) const {
         if (parent.isValid()) return 0;
@@ -12,22 +13,22 @@ namespace UI {
     }
 
     QVariant WidgetModel::data(const QModelIndex& index, int role) const {
-        if (!index.isValid() || index.row() >= m_instances.size()) return QVariant();
+        if (!index.isValid() || index.row() >= static_cast<int>(m_instances.size())) return {};
         
         const auto& instance = m_instances[index.row()];
-        if (role == KindRole) return QString::fromStdString(instance.vm->GetName());
+        if (role == KindRole) return QString::fromStdString(instance.vm->GetKind());
         if (role == SlotRole) return instance.slot;
         if (role == SpanRole) return instance.vm->GetSpan();
         
-        return QVariant();
+        return {};
     }
 
     QHash<int, QByteArray> WidgetModel::roleNames() const {
-        QHash<int, QByteArray> roles;
-        roles[KindRole] = "kind";
-        roles[SlotRole] = "slot";
-        roles[SpanRole] = "span";
-        return roles;
+        return {
+            {KindRole, "kind"},
+            {SlotRole, "slot"},
+            {SpanRole, "span"}
+        };
     }
 
     void WidgetModel::loadFromConfig() {
@@ -37,10 +38,9 @@ namespace UI {
         auto& configMgr = Core::ConfigManager::GetInstance();
         configMgr.Load();
         auto activeWidgets = configMgr.GetActiveWidgets();
-        auto& registry = WidgetRegistry::GetInstance();
+        const auto& registry = Widgets::WidgetRegistry::GetInstance();
 
         for (const auto& wConfig : activeWidgets) {
-            // 修复：移除多余参数，并显式构造
             if (auto widget = registry.Create(wConfig.name)) {
                 m_instances.push_back(WidgetInstance{std::move(widget), wConfig.slot});
             }
@@ -55,11 +55,9 @@ namespace UI {
         }
     }
 
-    void UI::WidgetModel::handleWidgetDropped(int draggedIndex, float dropCenterX, float dpiScale, float containerWidth) {
+    void WidgetModel::handleWidgetDropped(int draggedIndex, float dropCenterX, float cellWidth, float spacing, float containerWidth) {
         if (draggedIndex < 0 || draggedIndex >= static_cast<int>(m_instances.size())) return;
 
-        float cellWidth = 40.0f * dpiScale;
-        float spacing = 8.0f * dpiScale;
         float unitWidth = cellWidth + spacing;
         int span = m_instances[draggedIndex].vm->GetSpan();
         float widgetWidth = (span * cellWidth) + std::max(0, span - 1) * spacing;
@@ -67,10 +65,8 @@ namespace UI {
         float dropLeftX = dropCenterX - (widgetWidth / 2.0f);
         int targetSlot = static_cast<int>(std::round(dropLeftX / unitWidth));
 
-        // 1. 左边界限制
         if (targetSlot < 0) targetSlot = 0;
 
-        // 2. 右边界限制：基于奇数网格总槽位计算
         if (containerWidth > 0.0f) {
             int rawSlots = static_cast<int>(std::round((containerWidth + spacing) / unitWidth));
             int totalSlots = (rawSlots % 2 == 1) ? rawSlots : std::max(1, rawSlots - 1);
@@ -83,7 +79,6 @@ namespace UI {
 
         int oldSlot = m_instances[draggedIndex].slot;
 
-        // 碰撞检测与槽位交换
         for (size_t i = 0; i < m_instances.size(); ++i) {
             if (i == static_cast<size_t>(draggedIndex)) continue;
             int otherStart = m_instances[i].slot;
@@ -107,11 +102,11 @@ namespace UI {
         }
     }
 
-
-void WidgetModel::refreshLayoutAndSync() {
+    void WidgetModel::refreshLayoutAndSync() {
         std::vector<Core::WidgetConfig> newConfigList;
+        newConfigList.reserve(m_instances.size());
         for (const auto& instance : m_instances) {
-            newConfigList.push_back({instance.vm->GetName(), instance.slot});
+            newConfigList.push_back({instance.vm->GetKind(), instance.slot});
         }
         Core::ConfigManager::GetInstance().SetActiveWidgets(newConfigList);
     }

@@ -3,10 +3,9 @@
 #include <vector>
 
 namespace Core {
-    // [新增]：结构化的配置文件基元
     struct WidgetConfig {
         std::string name;
-        int slot; // 记录组件停留在哪个网格上
+        int slot;
     };
 
     class ConfigManager {

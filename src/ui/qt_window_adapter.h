@@ -12,12 +12,7 @@ namespace UI {
         QtWindowAdapter(int& argc, char** argv);
         ~QtWindowAdapter() override = default;
 
-        void SetDpiScale(float scale) override {}
-        void SetSize(uint32_t width, uint32_t height) override {}
-        void SetPosition(int x, int y) override {}
-        void Show() override {}
         void Run() override;
-        void HideFromAltTabAndTaskbar() override;
         void Quit() override;
 
     private:
