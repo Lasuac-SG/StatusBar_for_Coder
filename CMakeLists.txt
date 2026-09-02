@@ -16,6 +16,7 @@ endif()
 add_library(statusbar_core STATIC)
 target_sources(statusbar_core PRIVATE
     src/core/config_manager.cpp
+    src/core/layout_engine.cpp
     src/core/window_manager.cpp
     src/platform/appbar_proxy.cpp
     src/platform/display.cpp
