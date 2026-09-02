@@ -8,3 +8,7 @@ add_test(NAME statusbar_smoke_test COMMAND statusbar_smoke_test)
 qt_add_executable(layout_engine_test layout_engine_test.cpp)
 target_link_libraries(layout_engine_test PRIVATE statusbar_core Qt6::Test)
 add_test(NAME layout_engine_test COMMAND layout_engine_test)
+
+qt_add_executable(config_repository_test config_repository_test.cpp)
+target_link_libraries(config_repository_test PRIVATE statusbar_core Qt6::Test)
+add_test(NAME config_repository_test COMMAND config_repository_test)

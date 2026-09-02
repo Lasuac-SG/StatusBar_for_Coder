@@ -1,6 +1,7 @@
 #include "ui/widget_model.h"
-#include "core/config_manager.h"
+#include "core/config_repository.h"
 #include "widgets/widget_registry.h"
+#include <QUuid>
 #include <cmath>
 #include <algorithm>
 
@@ -35,18 +36,21 @@ namespace UI {
         beginResetModel();
         m_instances.clear();
         
-        auto& configMgr = Core::ConfigManager::GetInstance();
-        configMgr.Load();
-        auto activeWidgets = configMgr.GetActiveWidgets();
+        const Core::ConfigRepository repository(QStringLiteral("config.json"));
+        const auto config = repository.load();
+        if (!config.hasValue()) {
+            endResetModel();
+            return;
+        }
         const auto& registry = Widgets::WidgetRegistry::GetInstance();
 
-        for (const auto& wConfig : activeWidgets) {
-            if (auto widget = registry.Create(wConfig.name)) {
-                m_instances.push_back(WidgetInstance{std::move(widget), wConfig.slot});
+        for (const auto& wConfig : config.value().widgets) {
+            if (auto widget = registry.Create(wConfig.type.toStdString())) {
+                m_instances.push_back(
+                    WidgetInstance{std::move(widget), wConfig.slot, wConfig.id, wConfig.settings});
             }
         }
         endResetModel();
-        refreshLayoutAndSync();
     }
 
     void WidgetModel::updateAll() {
@@ -103,11 +107,19 @@ namespace UI {
     }
 
     void WidgetModel::refreshLayoutAndSync() {
-        std::vector<Core::WidgetConfig> newConfigList;
-        newConfigList.reserve(m_instances.size());
+        Core::ConfigDocument document;
+        document.widgets.reserve(static_cast<qsizetype>(m_instances.size()));
         for (const auto& instance : m_instances) {
-            newConfigList.push_back({instance.vm->GetKind(), instance.slot});
+            document.widgets.append({
+                instance.id.isEmpty()
+                    ? QUuid::createUuid().toString(QUuid::WithoutBraces)
+                    : instance.id,
+                QString::fromStdString(instance.vm->GetKind()),
+                instance.slot,
+                instance.settings,
+            });
         }
-        Core::ConfigManager::GetInstance().SetActiveWidgets(newConfigList);
+        const Core::ConfigRepository repository(QStringLiteral("config.json"));
+        (void)repository.save(document);
     }
 }

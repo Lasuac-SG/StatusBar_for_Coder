@@ -1,5 +1,7 @@
 #pragma once
 #include <QAbstractListModel>
+#include <QJsonObject>
+#include <QString>
 #include <vector>
 #include <memory>
 #include "widgets/i_widget_view_model.h"
@@ -8,6 +10,8 @@ namespace UI {
     struct WidgetInstance {
         std::unique_ptr<Widgets::IWidgetViewModel> vm;
         int slot;
+        QString id;
+        QJsonObject settings;
     };
 
     class WidgetModel : public QAbstractListModel {
