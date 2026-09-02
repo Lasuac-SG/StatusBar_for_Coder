@@ -1,13 +1,11 @@
 #include "core/layout_engine.h"
 
 #include <algorithm>
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <limits>
-#include <set>
-#include <utility>
+#include <numeric>
 
 namespace Core {
 namespace {
@@ -52,48 +50,41 @@ namespace {
 struct FreeInterval final {
     std::int64_t start;
     std::int64_t end;
-    friend auto operator<=>(const FreeInterval&, const FreeInterval&) = default;
 };
 
 using FreeIntervals = std::vector<FreeInterval>;
-
-struct FailedState final {
-    std::size_t itemIndex;
-    FreeIntervals freeIntervals;
-    friend auto operator<=>(const FailedState&, const FailedState&) = default;
-};
 
 [[nodiscard]] std::int64_t distanceFrom(std::int64_t candidate, std::int64_t original) noexcept
 {
     return candidate >= original ? candidate - original : original - candidate;
 }
 
-[[nodiscard]] std::vector<std::int64_t> candidatesFor(
+[[nodiscard]] std::optional<std::int64_t> nearestCandidateFor(
     const FreeIntervals& freeIntervals,
     std::int64_t span,
     std::int64_t originalSlot)
 {
-    std::vector<std::int64_t> candidates;
-    candidates.reserve(freeIntervals.size() * 3);
+    std::optional<std::int64_t> bestCandidate;
     for (const auto& interval : freeIntervals) {
         if (interval.end - interval.start < span) {
             continue;
         }
 
         const auto lastSlot = interval.end - span;
-        candidates.push_back(std::clamp(originalSlot, interval.start, lastSlot));
-        candidates.push_back(interval.start);
-        candidates.push_back(lastSlot);
-    }
+        const auto candidate = std::clamp(originalSlot, interval.start, lastSlot);
+        if (!bestCandidate.has_value()) {
+            bestCandidate = candidate;
+            continue;
+        }
 
-    std::sort(candidates.begin(), candidates.end());
-    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-    std::sort(candidates.begin(), candidates.end(), [originalSlot](auto left, auto right) {
-        const auto leftDistance = distanceFrom(left, originalSlot);
-        const auto rightDistance = distanceFrom(right, originalSlot);
-        return leftDistance != rightDistance ? leftDistance < rightDistance : left < right;
-    });
-    return candidates;
+        const auto candidateDistance = distanceFrom(candidate, originalSlot);
+        const auto bestDistance = distanceFrom(*bestCandidate, originalSlot);
+        if (candidateDistance < bestDistance
+            || (candidateDistance == bestDistance && candidate < *bestCandidate)) {
+            bestCandidate = candidate;
+        }
+    }
+    return bestCandidate;
 }
 
 [[nodiscard]] FreeIntervals occupy(
@@ -120,40 +111,42 @@ struct FailedState final {
     return result;
 }
 
-[[nodiscard]] bool assignNormalized(
-    std::vector<LayoutItem>& items,
-    std::size_t itemIndex,
-    const FreeIntervals& freeIntervals,
-    std::set<FailedState>& failedStates)
+[[nodiscard]] std::optional<std::vector<LayoutItem>> greedyNearest(
+    std::vector<LayoutItem> items,
+    std::int64_t totalSlots)
 {
-    if (itemIndex == items.size()) {
-        return true;
-    }
-
-    FailedState state{itemIndex, freeIntervals};
-    if (failedStates.contains(state)) {
-        return false;
-    }
-
-    auto& item = items[itemIndex];
-    const int originalSlot = item.slot;
-    const auto candidates = candidatesFor(freeIntervals, item.span, originalSlot);
-    for (const auto candidate : candidates) {
-        if (candidate < std::numeric_limits<int>::min()
-            || candidate > std::numeric_limits<int>::max()) {
-            continue;
+    FreeIntervals freeIntervals{{0, totalSlots}};
+    for (auto& item : items) {
+        const auto candidate = nearestCandidateFor(freeIntervals, item.span, item.slot);
+        if (!candidate.has_value() || *candidate < std::numeric_limits<int>::min()
+            || *candidate > std::numeric_limits<int>::max()) {
+            return std::nullopt;
         }
 
-        item.slot = static_cast<int>(candidate);
-        const auto nextFreeIntervals = occupy(freeIntervals, candidate, item.span);
-        if (assignNormalized(items, itemIndex + 1, nextFreeIntervals, failedStates)) {
-            return true;
-        }
+        item.slot = static_cast<int>(*candidate);
+        freeIntervals = occupy(freeIntervals, *candidate, item.span);
     }
+    return items;
+}
 
-    item.slot = originalSlot;
-    failedStates.insert(std::move(state));
-    return false;
+[[nodiscard]] std::vector<LayoutItem> spatialCompactionFallback(std::vector<LayoutItem> items)
+{
+    std::vector<std::size_t> spatialOrder(items.size());
+    std::iota(spatialOrder.begin(), spatialOrder.end(), std::size_t{0});
+    std::stable_sort(spatialOrder.begin(), spatialOrder.end(), [&items](auto left, auto right) {
+        return items[left].slot < items[right].slot;
+    });
+
+    std::int64_t nextSlot = 0;
+    for (const auto itemIndex : spatialOrder) {
+        if (nextSlot < std::numeric_limits<int>::min()
+            || nextSlot > std::numeric_limits<int>::max()) {
+            return {};
+        }
+        items[itemIndex].slot = static_cast<int>(nextSlot);
+        nextSlot += items[itemIndex].span;
+    }
+    return items;
 }
 }
 
@@ -197,12 +190,13 @@ std::vector<LayoutItem> LayoutEngine::normalize(std::vector<LayoutItem> items, i
         }
     }
 
-    FreeIntervals freeIntervals{{0, availableSlots}};
-    std::set<FailedState> failedStates;
-    if (!assignNormalized(items, 0, freeIntervals, failedStates)) {
-        return {};
+    // Phase 1: greedy-nearest placement in stable input order.
+    if (auto greedyResult = greedyNearest(items, availableSlots); greedyResult.has_value()) {
+        return *greedyResult;
     }
-    return items;
+
+    // Phase 2: spatial-compaction fallback by original slot, then input index.
+    return spatialCompactionFallback(items);
 }
 
 std::optional<std::vector<LayoutItem>> LayoutEngine::drop(

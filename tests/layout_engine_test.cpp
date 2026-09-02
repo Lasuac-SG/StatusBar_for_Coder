@@ -102,7 +102,7 @@ private slots:
         QVERIFY(LayoutEngine::normalize(items, 7).empty());
     }
 
-    void normalizesUsingNearestFeasibleSlots()
+    void usesGreedyNearestFreeInterval()
     {
         const std::vector<LayoutItem> items{{"first", 2, 2}, {"second", 2, 1}};
         const auto result = LayoutEngine::normalize(items, 5);
@@ -112,7 +112,7 @@ private slots:
         QCOMPARE(result.at(1).slot, 1);
     }
 
-    void normalizesAllItemsInStableInputOrderWhenCapacityFits()
+    void usesSpatialCompactionFallbackForSmallThenWide()
     {
         const std::vector<LayoutItem> items{{"small", 2, 1}, {"wide", 0, 3}};
         const auto result = LayoutEngine::normalize(items, 4);
@@ -123,7 +123,18 @@ private slots:
         QVERIFY(LayoutEngine::isValid(result, 4));
     }
 
-    void normalizesIntMaxSlotCountWithoutScanningSlots()
+    void usesSpatialCompactionFallbackAfterGreedyFragmentation()
+    {
+        const std::vector<LayoutItem> items{{"small", 5, 2}, {"wide", 0, 6}};
+        const auto result = LayoutEngine::normalize(items, 10);
+
+        QCOMPARE(result.size(), items.size());
+        QCOMPARE(result.at(0).slot, 6);
+        QCOMPARE(result.at(1).slot, 0);
+        QVERIFY(LayoutEngine::isValid(result, 10));
+    }
+
+    void greedyNearestAndSpatialCompactionHandleIntMaxWithoutScanningSlots()
     {
         constexpr int totalSlots = std::numeric_limits<int>::max();
         const std::vector<LayoutItem> items{
@@ -133,9 +144,42 @@ private slots:
         const auto result = LayoutEngine::normalize(items, totalSlots);
 
         QCOMPARE(result.size(), items.size());
-        QCOMPARE(result.at(0).slot, 0);
-        QCOMPARE(result.at(1).slot, 1);
+        QCOMPARE(result.at(0).slot, totalSlots - 1);
+        QCOMPARE(result.at(1).slot, 0);
         QVERIFY(LayoutEngine::isValid(result, totalSlots));
+    }
+
+    void greedyNearestWithSpatialCompactionFallbackSatisfiesSmallGridProperties()
+    {
+        // This contract guarantees deterministic validity and preservation, not global optimality.
+        for (int totalSlots = 2; totalSlots <= 6; ++totalSlots) {
+            for (int firstSpan = 1; firstSpan < totalSlots; ++firstSpan) {
+                for (int secondSpan = 1; secondSpan <= totalSlots - firstSpan; ++secondSpan) {
+                    for (int firstSlot = -1; firstSlot <= totalSlots; ++firstSlot) {
+                        for (int secondSlot = -1; secondSlot <= totalSlots; ++secondSlot) {
+                            const std::vector<LayoutItem> items{
+                                {"first", firstSlot, firstSpan},
+                                {"second", secondSlot, secondSpan},
+                            };
+                            const bool inputWasValid = LayoutEngine::isValid(items, totalSlots);
+                            const auto result = LayoutEngine::normalize(items, totalSlots);
+                            const auto repeated = LayoutEngine::normalize(items, totalSlots);
+
+                            QCOMPARE(result.size(), items.size());
+                            QVERIFY(result == repeated);
+                            QVERIFY(LayoutEngine::isValid(result, totalSlots));
+                            for (std::size_t index = 0; index < items.size(); ++index) {
+                                QVERIFY(result[index].id == items[index].id);
+                                QCOMPARE(result[index].span, items[index].span);
+                            }
+                            if (inputWasValid) {
+                                QVERIFY(result == items);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     void rejectsInvalidLayouts_data()
