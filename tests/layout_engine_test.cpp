@@ -2,10 +2,13 @@
 
 #include <QtTest>
 
+#include <limits>
 #include <vector>
 
 using Core::LayoutEngine;
 using Core::LayoutItem;
+
+Q_DECLARE_METATYPE(std::vector<LayoutItem>)
 
 class LayoutEngineTest final : public QObject {
     Q_OBJECT
@@ -17,6 +20,7 @@ private slots:
         const auto result = LayoutEngine::drop(items, "clock", 5, 9);
 
         QVERIFY(result.has_value());
+        QCOMPARE(result->size(), items.size());
         QCOMPARE(result->at(0).slot, 5);
         QCOMPARE(result->at(1).slot, 0);
         QVERIFY(LayoutEngine::isValid(*result, 9));
@@ -43,7 +47,32 @@ private slots:
         const auto result = LayoutEngine::drop(items, "clock", 99, 7);
 
         QVERIFY(result.has_value());
+        QCOMPARE(result->size(), items.size());
         QCOMPARE(result->at(0).slot, 4);
+    }
+
+    void clampsNegativeDropTargetToZero()
+    {
+        const std::vector<LayoutItem> items{{"clock", 2, 2}};
+        const auto result = LayoutEngine::drop(items, "clock", -10, 6);
+
+        QVERIFY(result.has_value());
+        QCOMPARE(result->size(), items.size());
+        QCOMPARE(result->at(0).slot, 0);
+    }
+
+    void rejectsDropWithInvalidInput()
+    {
+        const std::vector<LayoutItem> items{{"clock", -1, 2}};
+
+        QVERIFY(!LayoutEngine::drop(items, "clock", 0, 6).has_value());
+    }
+
+    void rejectsUnknownDraggedId()
+    {
+        const std::vector<LayoutItem> items{{"clock", 0, 2}};
+
+        QVERIFY(!LayoutEngine::drop(items, "missing", 3, 6).has_value());
     }
 
     void normalizesAfterScreenShrink()
@@ -62,24 +91,61 @@ private slots:
         QVERIFY(LayoutEngine::normalize(items, 7).empty());
     }
 
-    void normalizesUsingStableNearestLowerPreference()
+    void normalizesUsingNearestFeasibleSlots()
     {
         const std::vector<LayoutItem> items{{"first", 2, 2}, {"second", 2, 1}};
         const auto result = LayoutEngine::normalize(items, 5);
 
+        QCOMPARE(result.size(), items.size());
         QCOMPARE(result.at(0).slot, 2);
-        QCOMPARE(result.at(1).slot, 1);
+        QCOMPARE(result.at(1).slot, 4);
     }
 
-    void normalizesAllItemsWhenTotalCapacityFits()
+    void normalizesAllItemsInStableInputOrderWhenCapacityFits()
     {
         const std::vector<LayoutItem> items{{"small", 2, 1}, {"wide", 0, 3}};
         const auto result = LayoutEngine::normalize(items, 4);
 
         QCOMPARE(result.size(), items.size());
-        QCOMPARE(result.at(0).slot, 3);
-        QCOMPARE(result.at(1).slot, 0);
+        QCOMPARE(result.at(0).slot, 0);
+        QCOMPARE(result.at(1).slot, 1);
         QVERIFY(LayoutEngine::isValid(result, 4));
+    }
+
+    void normalizesIntMaxSlotCountWithoutScanningSlots()
+    {
+        constexpr int totalSlots = std::numeric_limits<int>::max();
+        const std::vector<LayoutItem> items{
+            {"small", totalSlots / 2, 1},
+            {"wide", 0, totalSlots - 1},
+        };
+        const auto result = LayoutEngine::normalize(items, totalSlots);
+
+        QCOMPARE(result.size(), items.size());
+        QCOMPARE(result.at(0).slot, 0);
+        QCOMPARE(result.at(1).slot, 1);
+        QVERIFY(LayoutEngine::isValid(result, totalSlots));
+    }
+
+    void rejectsInvalidLayouts_data()
+    {
+        QTest::addColumn<std::vector<LayoutItem>>("items");
+        QTest::addColumn<int>("totalSlots");
+
+        QTest::newRow("negative span") << std::vector<LayoutItem>{{"a", 0, -1}} << 3;
+        QTest::newRow("negative slot") << std::vector<LayoutItem>{{"a", -1, 1}} << 3;
+        QTest::newRow("overlap")
+            << std::vector<LayoutItem>{{"a", 0, 2}, {"b", 1, 2}} << 4;
+        QTest::newRow("out of bounds") << std::vector<LayoutItem>{{"a", 2, 2}} << 3;
+        QTest::newRow("negative total slots") << std::vector<LayoutItem>{} << -1;
+    }
+
+    void rejectsInvalidLayouts()
+    {
+        QFETCH(std::vector<LayoutItem>, items);
+        QFETCH(int, totalSlots);
+
+        QVERIFY(!LayoutEngine::isValid(items, totalSlots));
     }
 
     void validatesPositiveSpansAndUniqueIds()

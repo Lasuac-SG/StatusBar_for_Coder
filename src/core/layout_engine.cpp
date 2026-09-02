@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 
 namespace Core {
 namespace {
@@ -30,59 +31,19 @@ namespace {
     return true;
 }
 
-[[nodiscard]] bool canPlace(
-    const std::vector<LayoutItem>& items,
-    std::size_t itemIndex,
-    int candidateSlot) noexcept
+[[nodiscard]] bool hasUniqueIdsAndPositiveSpans(const std::vector<LayoutItem>& items)
 {
-    const auto& item = items[itemIndex];
-    for (std::size_t index = 0; index < itemIndex; ++index) {
-        const auto& placed = items[index];
-        if (overlaps(candidateSlot, item.span, placed.slot, placed.span)) {
+    std::vector<std::string_view> ids;
+    ids.reserve(items.size());
+    for (const auto& item : items) {
+        if (item.span <= 0) {
             return false;
         }
-    }
-    return true;
-}
-
-[[nodiscard]] bool placeNormalized(
-    std::vector<LayoutItem>& items,
-    std::size_t itemIndex,
-    int totalSlots)
-{
-    if (itemIndex == items.size()) {
-        return true;
+        ids.emplace_back(item.id);
     }
 
-    auto& item = items[itemIndex];
-    const int originalSlot = item.slot;
-    const int lastSlot = totalSlots - item.span;
-    const int preferredSlot = std::clamp(originalSlot, 0, lastSlot);
-    const auto maxDistance = std::max(
-        static_cast<std::int64_t>(preferredSlot),
-        static_cast<std::int64_t>(lastSlot) - preferredSlot);
-
-    for (std::int64_t distance = 0; distance <= maxDistance; ++distance) {
-        const auto lower = static_cast<std::int64_t>(preferredSlot) - distance;
-        if (lower >= 0 && canPlace(items, itemIndex, static_cast<int>(lower))) {
-            item.slot = static_cast<int>(lower);
-            if (placeNormalized(items, itemIndex + 1, totalSlots)) {
-                return true;
-            }
-        }
-
-        const auto upper = static_cast<std::int64_t>(preferredSlot) + distance;
-        if (distance != 0 && upper <= lastSlot
-            && canPlace(items, itemIndex, static_cast<int>(upper))) {
-            item.slot = static_cast<int>(upper);
-            if (placeNormalized(items, itemIndex + 1, totalSlots)) {
-                return true;
-            }
-        }
-    }
-
-    item.slot = originalSlot;
-    return false;
+    std::sort(ids.begin(), ids.end());
+    return std::adjacent_find(ids.begin(), ids.end()) == ids.end();
 }
 }
 
@@ -110,20 +71,33 @@ bool LayoutEngine::isValid(const std::vector<LayoutItem>& items, int totalSlots)
 
 std::vector<LayoutItem> LayoutEngine::normalize(std::vector<LayoutItem> items, int totalSlots)
 {
-    if (totalSlots < 0 || !hasValidIdentityAndSpan(items)) {
+    if (totalSlots < 0 || !hasUniqueIdsAndPositiveSpans(items)) {
         return {};
     }
 
+    const auto availableSlots = static_cast<std::int64_t>(totalSlots);
     std::int64_t requiredSlots = 0;
     for (const auto& item : items) {
         requiredSlots += item.span;
-        if (item.span > totalSlots || requiredSlots > totalSlots) {
+        if (requiredSlots > availableSlots) {
             return {};
         }
     }
 
-    if (!placeNormalized(items, 0, totalSlots)) {
-        return {};
+    std::int64_t previousEnd = 0;
+    std::int64_t remainingSpanAfter = requiredSlots;
+    for (auto& item : items) {
+        remainingSpanAfter -= item.span;
+        const auto lastFeasibleSlot = availableSlots - item.span - remainingSpanAfter;
+        const auto selectedSlot = std::clamp(
+            static_cast<std::int64_t>(item.slot), previousEnd, lastFeasibleSlot);
+        if (selectedSlot < std::numeric_limits<int>::min()
+            || selectedSlot > std::numeric_limits<int>::max()) {
+            return {};
+        }
+
+        item.slot = static_cast<int>(selectedSlot);
+        previousEnd = selectedSlot + item.span;
     }
     return items;
 }
