@@ -82,6 +82,17 @@ private slots:
 
         QVERIFY(LayoutEngine::isValid(result, 7));
         QCOMPARE(result.size(), items.size());
+        QCOMPARE(result.at(0).slot, 5);
+        QCOMPARE(result.at(1).slot, 1);
+    }
+
+    void preservesAlreadyValidLayoutExactly()
+    {
+        const std::vector<LayoutItem> items{{"a", 5, 1}, {"b", 0, 1}};
+
+        const auto result = LayoutEngine::normalize(items, 6);
+
+        QVERIFY(result == items);
     }
 
     void returnsEmptyNormalizationWhenCapacityIsInsufficient()
@@ -98,7 +109,7 @@ private slots:
 
         QCOMPARE(result.size(), items.size());
         QCOMPARE(result.at(0).slot, 2);
-        QCOMPARE(result.at(1).slot, 4);
+        QCOMPARE(result.at(1).slot, 1);
     }
 
     void normalizesAllItemsInStableInputOrderWhenCapacityFits()
@@ -107,8 +118,8 @@ private slots:
         const auto result = LayoutEngine::normalize(items, 4);
 
         QCOMPARE(result.size(), items.size());
-        QCOMPARE(result.at(0).slot, 0);
-        QCOMPARE(result.at(1).slot, 1);
+        QCOMPARE(result.at(0).slot, 3);
+        QCOMPARE(result.at(1).slot, 0);
         QVERIFY(LayoutEngine::isValid(result, 4));
     }
 

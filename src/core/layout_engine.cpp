@@ -1,10 +1,13 @@
 #include "core/layout_engine.h"
 
 #include <algorithm>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <set>
+#include <utility>
 
 namespace Core {
 namespace {
@@ -45,6 +48,113 @@ namespace {
     std::sort(ids.begin(), ids.end());
     return std::adjacent_find(ids.begin(), ids.end()) == ids.end();
 }
+
+struct FreeInterval final {
+    std::int64_t start;
+    std::int64_t end;
+    friend auto operator<=>(const FreeInterval&, const FreeInterval&) = default;
+};
+
+using FreeIntervals = std::vector<FreeInterval>;
+
+struct FailedState final {
+    std::size_t itemIndex;
+    FreeIntervals freeIntervals;
+    friend auto operator<=>(const FailedState&, const FailedState&) = default;
+};
+
+[[nodiscard]] std::int64_t distanceFrom(std::int64_t candidate, std::int64_t original) noexcept
+{
+    return candidate >= original ? candidate - original : original - candidate;
+}
+
+[[nodiscard]] std::vector<std::int64_t> candidatesFor(
+    const FreeIntervals& freeIntervals,
+    std::int64_t span,
+    std::int64_t originalSlot)
+{
+    std::vector<std::int64_t> candidates;
+    candidates.reserve(freeIntervals.size() * 3);
+    for (const auto& interval : freeIntervals) {
+        if (interval.end - interval.start < span) {
+            continue;
+        }
+
+        const auto lastSlot = interval.end - span;
+        candidates.push_back(std::clamp(originalSlot, interval.start, lastSlot));
+        candidates.push_back(interval.start);
+        candidates.push_back(lastSlot);
+    }
+
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    std::sort(candidates.begin(), candidates.end(), [originalSlot](auto left, auto right) {
+        const auto leftDistance = distanceFrom(left, originalSlot);
+        const auto rightDistance = distanceFrom(right, originalSlot);
+        return leftDistance != rightDistance ? leftDistance < rightDistance : left < right;
+    });
+    return candidates;
+}
+
+[[nodiscard]] FreeIntervals occupy(
+    const FreeIntervals& freeIntervals,
+    std::int64_t slot,
+    std::int64_t span)
+{
+    FreeIntervals result;
+    result.reserve(freeIntervals.size() + 1);
+    bool occupied = false;
+    for (const auto& interval : freeIntervals) {
+        if (!occupied && interval.start <= slot && slot + span <= interval.end) {
+            if (interval.start < slot) {
+                result.push_back({interval.start, slot});
+            }
+            if (slot + span < interval.end) {
+                result.push_back({slot + span, interval.end});
+            }
+            occupied = true;
+            continue;
+        }
+        result.push_back(interval);
+    }
+    return result;
+}
+
+[[nodiscard]] bool assignNormalized(
+    std::vector<LayoutItem>& items,
+    std::size_t itemIndex,
+    const FreeIntervals& freeIntervals,
+    std::set<FailedState>& failedStates)
+{
+    if (itemIndex == items.size()) {
+        return true;
+    }
+
+    FailedState state{itemIndex, freeIntervals};
+    if (failedStates.contains(state)) {
+        return false;
+    }
+
+    auto& item = items[itemIndex];
+    const int originalSlot = item.slot;
+    const auto candidates = candidatesFor(freeIntervals, item.span, originalSlot);
+    for (const auto candidate : candidates) {
+        if (candidate < std::numeric_limits<int>::min()
+            || candidate > std::numeric_limits<int>::max()) {
+            continue;
+        }
+
+        item.slot = static_cast<int>(candidate);
+        const auto nextFreeIntervals = occupy(freeIntervals, candidate, item.span);
+        if (assignNormalized(items, itemIndex + 1, nextFreeIntervals, failedStates)) {
+            return true;
+        }
+    }
+
+    item.slot = originalSlot;
+    failedStates.insert(std::move(state));
+    return false;
+}
 }
 
 bool LayoutEngine::isValid(const std::vector<LayoutItem>& items, int totalSlots) noexcept
@@ -71,6 +181,9 @@ bool LayoutEngine::isValid(const std::vector<LayoutItem>& items, int totalSlots)
 
 std::vector<LayoutItem> LayoutEngine::normalize(std::vector<LayoutItem> items, int totalSlots)
 {
+    if (isValid(items, totalSlots)) {
+        return items;
+    }
     if (totalSlots < 0 || !hasUniqueIdsAndPositiveSpans(items)) {
         return {};
     }
@@ -84,20 +197,10 @@ std::vector<LayoutItem> LayoutEngine::normalize(std::vector<LayoutItem> items, i
         }
     }
 
-    std::int64_t previousEnd = 0;
-    std::int64_t remainingSpanAfter = requiredSlots;
-    for (auto& item : items) {
-        remainingSpanAfter -= item.span;
-        const auto lastFeasibleSlot = availableSlots - item.span - remainingSpanAfter;
-        const auto selectedSlot = std::clamp(
-            static_cast<std::int64_t>(item.slot), previousEnd, lastFeasibleSlot);
-        if (selectedSlot < std::numeric_limits<int>::min()
-            || selectedSlot > std::numeric_limits<int>::max()) {
-            return {};
-        }
-
-        item.slot = static_cast<int>(selectedSlot);
-        previousEnd = selectedSlot + item.span;
+    FreeIntervals freeIntervals{{0, availableSlots}};
+    std::set<FailedState> failedStates;
+    if (!assignNormalized(items, 0, freeIntervals, failedStates)) {
+        return {};
     }
     return items;
 }
