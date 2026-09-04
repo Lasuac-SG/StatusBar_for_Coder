@@ -325,8 +325,11 @@ ConfigRepository::ConfigRepository(
     QStringList legacyCandidates,
     std::shared_ptr<Internal::ConfigRepositoryOperations> operations)
     : configPath_(cleanAbsolutePath(configPath))
-    , operations_(std::move(operations))
+    , operations_(operations ? std::move(operations)
+                             : Internal::defaultConfigRepositoryOperations())
 {
+    Q_ASSERT(operations_);
+
     for (const QString& candidate : legacyCandidates) {
         if (candidate.isEmpty()) {
             continue;

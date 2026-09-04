@@ -236,6 +236,26 @@ private slots:
         QCOMPARE(readBytes(destination), validBytes);
     }
 
+    void internalFactoryFallsBackForNullOperations()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        const QString destination = directory.filePath("config.json");
+        const auto repository = Core::Internal::makeConfigRepository(
+            destination, {}, nullptr);
+        const Core::ConfigDocument expected{
+            1,
+            {{"clock-id", "Clock", 2, QJsonObject{{"timezone", "UTC"}}}},
+        };
+
+        const auto saved = repository.save(expected);
+        QVERIFY2(saved.hasValue(), qPrintable(saved.error()));
+        const auto loaded = repository.load();
+        QVERIFY2(loaded.hasValue(), qPrintable(loaded.error()));
+        QCOMPARE(loaded.value().widgets, expected.widgets);
+    }
+
     void preservesUnknownWidgetEntries()
     {
         QTemporaryDir directory;
@@ -403,9 +423,8 @@ private slots:
         auto pendingLoad = std::async(std::launch::async, [&repository] {
             return repository.load();
         });
-        QVERIFY2(operations->waitForLockAttempts(2),
-                 "repository did not enter its second lock attempt");
-        QCOMPARE(operations->lockAttempts(), 2);
+        const bool reachedSecondAttempt = operations->waitForLockAttempts(2);
+        const int lockAttempts = operations->lockAttempts();
 
         const QJsonObject concurrentDestination{
             {"version", 1},
@@ -416,9 +435,13 @@ private slots:
                             {"settings", QJsonObject{{"source", "other-instance"}}},
                         }}},
         };
-        const bool destinationWritten = writeBytes(
+        const bool destinationWritten = reachedSecondAttempt && writeBytes(
             destination, QJsonDocument(concurrentDestination).toJson(QJsonDocument::Compact));
         operations->releaseSecondAttempt();
+
+        QVERIFY2(reachedSecondAttempt,
+                 "repository did not enter its second lock attempt");
+        QCOMPARE(lockAttempts, 2);
         QVERIFY(destinationWritten);
 
         const auto result = pendingLoad.get();
