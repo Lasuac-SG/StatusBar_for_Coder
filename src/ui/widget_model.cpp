@@ -79,6 +79,13 @@ namespace UI {
         }
 
         float unitWidth = cellWidth + spacing;
+        if (!std::isfinite(dropCenterX) || !std::isfinite(cellWidth)
+            || !std::isfinite(spacing) || !std::isfinite(containerWidth)
+            || unitWidth <= 0.0F || containerWidth <= 0.0F) {
+            setLastError(QStringLiteral("Cannot move widget: layout geometry is invalid"));
+            return false;
+        }
+
         int span = m_instances[draggedIndex].vm->GetSpan();
         float widgetWidth = (span * cellWidth) + std::max(0, span - 1) * spacing;
         
@@ -87,62 +94,57 @@ namespace UI {
 
         if (targetSlot < 0) targetSlot = 0;
 
-        if (containerWidth > 0.0f) {
-            int rawSlots = static_cast<int>(std::round((containerWidth + spacing) / unitWidth));
-            int totalSlots = (rawSlots % 2 == 1) ? rawSlots : std::max(1, rawSlots - 1);
-            int maxSlot = std::max(0, totalSlots - span);
-            
-            if (targetSlot > maxSlot) {
-                targetSlot = maxSlot;
-            }
+        int rawSlots = static_cast<int>(std::round((containerWidth + spacing) / unitWidth));
+        int totalSlots = (rawSlots % 2 == 1) ? rawSlots : std::max(1, rawSlots - 1);
+        int maxSlot = std::max(0, totalSlots - span);
+
+        if (targetSlot > maxSlot) {
+            targetSlot = maxSlot;
         }
 
-        int oldSlot = m_instances[draggedIndex].slot;
-        if (oldSlot == targetSlot) {
+        std::vector<Core::LayoutItem> currentLayout;
+        currentLayout.reserve(m_instances.size());
+        for (const auto& instance : m_instances) {
+            currentLayout.push_back({
+                instance.id.toStdString(),
+                instance.slot,
+                instance.vm->GetSpan(),
+            });
+        }
+
+        const auto candidate = Core::LayoutEngine::drop(
+            currentLayout,
+            currentLayout[static_cast<size_t>(draggedIndex)].id,
+            targetSlot,
+            totalSlots);
+        if (!candidate.has_value()) {
+            setLastError(QStringLiteral("Cannot move widget: layout transaction was rejected"));
+            return false;
+        }
+
+        if (*candidate == currentLayout) {
             setLastError({});
             return true;
         }
 
-        std::vector<int> previousSlots;
-        previousSlots.reserve(m_instances.size());
-        for (const auto& instance : m_instances) {
-            previousSlots.push_back(instance.slot);
-        }
-
-        for (size_t i = 0; i < m_instances.size(); ++i) {
-            if (i == static_cast<size_t>(draggedIndex)) continue;
-            int otherStart = m_instances[i].slot;
-            int otherEnd = otherStart + m_instances[i].vm->GetSpan() - 1;
-            int targetEnd = targetSlot + span - 1;
-
-            if (std::max(targetSlot, otherStart) <= std::min(targetEnd, otherEnd)) {
-                m_instances[i].slot = oldSlot;
-            }
-        }
-
-        m_instances[draggedIndex].slot = targetSlot;
-
-        auto updatedDocument = documentWithCurrentSlots();
+        auto updatedDocument = documentWithLayout(*candidate);
         if (!updatedDocument.hasValue()) {
-            for (size_t i = 0; i < m_instances.size(); ++i) {
-                m_instances[i].slot = previousSlots[i];
-            }
             setLastError(updatedDocument.error());
+            emit persistenceError(m_lastError);
             return false;
         }
 
         const auto saveResult = m_repository.save(updatedDocument.value());
         if (!saveResult.hasValue()) {
-            for (size_t i = 0; i < m_instances.size(); ++i) {
-                m_instances[i].slot = previousSlots[i];
-            }
             setLastError(QStringLiteral("Cannot save widget layout: %1").arg(saveResult.error()));
+            emit persistenceError(m_lastError);
             return false;
         }
 
         m_document = std::move(updatedDocument).value();
         for (size_t i = 0; i < m_instances.size(); ++i) {
-            if (m_instances[i].slot != previousSlots[i]) {
+            if (m_instances[i].slot != candidate->at(i).slot) {
+                m_instances[i].slot = candidate->at(i).slot;
                 const QModelIndex changed = index(static_cast<int>(i));
                 emit dataChanged(changed, changed, {SlotRole});
             }
@@ -151,9 +153,20 @@ namespace UI {
         return true;
     }
 
-    Core::Result<Core::ConfigDocument> WidgetModel::documentWithCurrentSlots() const {
+    Core::Result<Core::ConfigDocument> WidgetModel::documentWithLayout(
+        const std::vector<Core::LayoutItem>& layout) const {
+        if (layout.size() != m_instances.size()) {
+            return Core::Result<Core::ConfigDocument>::failure(
+                QStringLiteral("Cannot save widget layout: candidate size changed"));
+        }
+
         Core::ConfigDocument document = m_document;
-        for (const auto& instance : m_instances) {
+        for (size_t index = 0; index < m_instances.size(); ++index) {
+            const auto& instance = m_instances[index];
+            if (layout[index].id != instance.id.toStdString()) {
+                return Core::Result<Core::ConfigDocument>::failure(
+                    QStringLiteral("Cannot save widget layout: candidate id changed"));
+            }
             const auto match = std::find_if(
                 document.widgets.begin(),
                 document.widgets.end(),
@@ -165,7 +178,7 @@ namespace UI {
                     QStringLiteral("Cannot save widget layout: config id '%1' is missing")
                         .arg(instance.id));
             }
-            match->slot = instance.slot;
+            match->slot = layout[index].slot;
         }
         return Core::Result<Core::ConfigDocument>::success(std::move(document));
     }

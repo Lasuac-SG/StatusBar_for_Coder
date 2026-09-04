@@ -25,6 +25,13 @@ Window {
 
     property bool isEditing: false
 
+    Connections {
+        target: widgetModel
+        function onPersistenceError(message) {
+            console.error("[WidgetModel] " + message)
+        }
+    }
+
     Rectangle {
         id: container
         anchors.left: parent.left

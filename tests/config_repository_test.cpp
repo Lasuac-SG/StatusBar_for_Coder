@@ -6,11 +6,13 @@
 
 #include <QFile>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLockFile>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QUuid>
 
 #include <chrono>
@@ -290,7 +292,7 @@ private slots:
         QVERIFY(!QFile::exists(directory.filePath("config.legacy.backup.json")));
     }
 
-    void rechecksDestinationAfterAcquiringMigrationLock()
+    void loadsDestinationCreatedAfterInitialLockTimeout()
     {
         using namespace std::chrono_literals;
 
@@ -306,10 +308,14 @@ private slots:
         QVERIFY(heldLock.tryLock(0));
 
         const Core::ConfigRepository repository(destination, {legacy});
-        auto pendingLoad = std::async(std::launch::async, [&repository] {
+        std::promise<void> loadStarted;
+        auto started = loadStarted.get_future();
+        auto pendingLoad = std::async(std::launch::async, [&repository, &loadStarted] {
+            loadStarted.set_value();
             return repository.load();
         });
-        QCOMPARE(pendingLoad.wait_for(50ms), std::future_status::timeout);
+        started.wait();
+        QCOMPARE(pendingLoad.wait_for(650ms), std::future_status::timeout);
 
         const QJsonObject concurrentDestination{
             {"version", 1},
@@ -322,13 +328,64 @@ private slots:
         };
         QVERIFY(writeBytes(
             destination, QJsonDocument(concurrentDestination).toJson(QJsonDocument::Compact)));
-        heldLock.unlock();
+        QVERIFY(heldLock.isLocked());
 
         const auto result = pendingLoad.get();
         QVERIFY2(result.hasValue(), qPrintable(result.error()));
         QCOMPARE(result.value().widgets.front().id, QString("created-concurrently"));
+        QVERIFY(heldLock.isLocked());
         QVERIFY(!QFile::exists(directory.filePath("config.legacy.backup.json")));
         QVERIFY(QFile::exists(legacy));
+    }
+
+    void recoversAfterDestinationFailureFollowingBackupCommit()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        constexpr int widgetCount = 50'000;
+        QByteArray legacyBytes = R"({"widgets":[)";
+        for (int index = 0; index < widgetCount; ++index) {
+            if (index != 0) {
+                legacyBytes.append(',');
+            }
+            legacyBytes.append(R"({"name":"Clock","slot":)");
+            legacyBytes.append(QByteArray::number(index));
+            legacyBytes.append('}');
+        }
+        legacyBytes.append("]}");
+
+        const QString destination = directory.filePath("config.json");
+        const QString legacy = directory.filePath("legacy.json");
+        const QString backup = directory.filePath("config.legacy.backup.json");
+        QVERIFY(writeBytes(legacy, legacyBytes));
+
+        const Core::ConfigRepository repository(destination, {legacy});
+        auto pendingLoad = std::async(std::launch::async, [&repository] {
+            return repository.load();
+        });
+
+        QElapsedTimer backupWait;
+        backupWait.start();
+        while (!QFileInfo::exists(backup) && backupWait.elapsed() < 10'000) {
+            QThread::yieldCurrentThread();
+        }
+        QVERIFY2(QFileInfo::exists(backup), "migration did not commit its backup in time");
+        QVERIFY(QDir().mkpath(destination));
+
+        const auto failed = pendingLoad.get();
+        QVERIFY(!failed.hasValue());
+        QCOMPARE(readBytes(legacy), legacyBytes);
+        QCOMPARE(readBytes(backup), legacyBytes);
+        QVERIFY(QFileInfo(destination).isDir());
+
+        QVERIFY(QDir().rmdir(destination));
+        const auto retried = repository.load();
+        QVERIFY2(retried.hasValue(), qPrintable(retried.error()));
+        QCOMPARE(retried.value().widgets.size(), widgetCount);
+        QCOMPARE(readBytes(legacy), legacyBytes);
+        QCOMPARE(readBytes(backup), legacyBytes);
+        QVERIFY(QFileInfo(destination).isFile());
     }
 
     void usesFirstExistingLegacyCandidate()
@@ -591,7 +648,10 @@ private slots:
         Core::ConfigRepository repository(destination);
         const Core::ConfigDocument document{
             1,
-            {{"clock-id", "Clock", 0, QJsonObject{{"timezone", "UTC"}}}},
+            {
+                {"clock-id", "Clock", 0, QJsonObject{{"timezone", "UTC"}}},
+                {"cpu-id", "Cpu", 5, {}},
+            },
         };
         const auto initialSave = repository.save(document);
         QVERIFY2(initialSave.hasValue(), qPrintable(initialSave.error()));
@@ -600,14 +660,86 @@ private slots:
         const auto loadResult = model.loadFromConfig();
         QVERIFY2(loadResult.hasValue(), qPrintable(loadResult.error()));
         QCOMPARE(model.data(model.index(0), UI::WidgetModel::SlotRole).toInt(), 0);
+        QCOMPARE(model.data(model.index(1), UI::WidgetModel::SlotRole).toInt(), 5);
+        QSignalSpy persistenceErrors(&model, &UI::WidgetModel::persistenceError);
+        QSignalSpy changedRows(&model, &QAbstractItemModel::dataChanged);
 
         QVERIFY(QFile::remove(destination));
         QVERIFY(QDir().mkpath(destination));
-        QVERIFY(!model.handleWidgetDropped(0, 55.0F, 10.0F, 0.0F, 100.0F));
+        QVERIFY(!model.handleWidgetDropped(0, 65.0F, 10.0F, 0.0F, 90.0F));
 
         QCOMPARE(model.data(model.index(0), UI::WidgetModel::SlotRole).toInt(), 0);
+        QCOMPARE(model.data(model.index(1), UI::WidgetModel::SlotRole).toInt(), 5);
         QVERIFY2(!model.lastError().isEmpty(), "save failure must be exposed");
+        QCOMPARE(persistenceErrors.count(), 1);
+        QCOMPARE(persistenceErrors.front().front().toString(), model.lastError());
+        QCOMPARE(changedRows.count(), 0);
         QVERIFY(QFileInfo(destination).isDir());
+    }
+
+    void widgetModelRejectsMultiWidgetCollisionWithoutPersistence()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Widgets::RegisterAllWidgets();
+
+        const QString destination = directory.filePath("config.json");
+        Core::ConfigRepository repository(destination);
+        const Core::ConfigDocument document{
+            1,
+            {
+                {"wide", "Clock", 0, {}},
+                {"first", "Cpu", 4, {}},
+                {"second", "Cpu", 6, {}},
+            },
+        };
+        const auto initialSave = repository.save(document);
+        QVERIFY2(initialSave.hasValue(), qPrintable(initialSave.error()));
+        const QByteArray originalBytes = readBytes(destination);
+
+        UI::WidgetModel model(repository);
+        const auto loadResult = model.loadFromConfig();
+        QVERIFY2(loadResult.hasValue(), qPrintable(loadResult.error()));
+        QSignalSpy changedRows(&model, &QAbstractItemModel::dataChanged);
+
+        QVERIFY(!model.handleWidgetDropped(0, 55.0F, 10.0F, 0.0F, 90.0F));
+
+        QCOMPARE(model.data(model.index(0), UI::WidgetModel::SlotRole).toInt(), 0);
+        QCOMPARE(model.data(model.index(1), UI::WidgetModel::SlotRole).toInt(), 4);
+        QCOMPARE(model.data(model.index(2), UI::WidgetModel::SlotRole).toInt(), 6);
+        QCOMPARE(changedRows.count(), 0);
+        QCOMPARE(readBytes(destination), originalBytes);
+        QVERIFY2(model.lastError().contains("reject", Qt::CaseInsensitive),
+                 qPrintable(model.lastError()));
+    }
+
+    void widgetModelRejectsDropFromInvalidExistingLayout()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Widgets::RegisterAllWidgets();
+
+        const QString destination = directory.filePath("config.json");
+        Core::ConfigRepository repository(destination);
+        const Core::ConfigDocument document{
+            1,
+            {
+                {"clock", "Clock", 0, {}},
+                {"cpu", "Cpu", 2, {}},
+            },
+        };
+        const auto initialSave = repository.save(document);
+        QVERIFY2(initialSave.hasValue(), qPrintable(initialSave.error()));
+        const QByteArray originalBytes = readBytes(destination);
+
+        UI::WidgetModel model(repository);
+        const auto loadResult = model.loadFromConfig();
+        QVERIFY2(loadResult.hasValue(), qPrintable(loadResult.error()));
+
+        QVERIFY(!model.handleWidgetDropped(0, 65.0F, 10.0F, 0.0F, 90.0F));
+        QCOMPARE(model.data(model.index(0), UI::WidgetModel::SlotRole).toInt(), 0);
+        QCOMPARE(model.data(model.index(1), UI::WidgetModel::SlotRole).toInt(), 2);
+        QCOMPARE(readBytes(destination), originalBytes);
     }
 
     void widgetModelReportsLoadFailure()

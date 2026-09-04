@@ -1,5 +1,6 @@
 #pragma once
 #include "core/config_repository.h"
+#include "core/layout_engine.h"
 #include "core/widget_config.h"
 #include "widgets/i_widget_view_model.h"
 
@@ -42,9 +43,11 @@ namespace UI {
 
     signals:
         void lastErrorChanged();
+        void persistenceError(const QString& message);
 
     private:
-        [[nodiscard]] Core::Result<Core::ConfigDocument> documentWithCurrentSlots() const;
+        [[nodiscard]] Core::Result<Core::ConfigDocument> documentWithLayout(
+            const std::vector<Core::LayoutItem>& layout) const;
         void setLastError(QString error);
 
         Core::ConfigRepository m_repository;

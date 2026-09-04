@@ -340,8 +340,45 @@ Result<ConfigDocument> ConfigRepository::load() const
     const QString migrationLockPath = configPath_ + QStringLiteral(".migration.lock");
     QLockFile migrationLock(migrationLockPath);
     migrationLock.setStaleLockTime(30'000);
-    constexpr int migrationLockTimeoutMs = 500;
-    if (!migrationLock.tryLock(migrationLockTimeoutMs)) {
+    constexpr int migrationLockAttemptMs = 500;
+    constexpr int migrationLockAttempts = 2;
+    bool migrationLockAcquired = false;
+    for (int attempt = 0; attempt < migrationLockAttempts; ++attempt) {
+        if (migrationLock.tryLock(migrationLockAttemptMs)) {
+            migrationLockAcquired = true;
+            break;
+        }
+
+        switch (migrationLock.error()) {
+        case QLockFile::LockFailedError:
+            if (QFileInfo::exists(configPath_)) {
+                return loadDestination();
+            }
+            if (attempt + 1 == migrationLockAttempts) {
+                return Result<ConfigDocument>::failure(
+                    QStringLiteral("Timed out after %1 ms waiting for configuration migration "
+                                   "lock: %2")
+                        .arg(migrationLockAttemptMs * migrationLockAttempts)
+                        .arg(migrationLockPath));
+            }
+            break;
+        case QLockFile::PermissionError:
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Permission denied while acquiring configuration migration lock: "
+                               "%1")
+                    .arg(migrationLockPath));
+        case QLockFile::UnknownError:
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Unknown error while acquiring configuration migration lock: %1")
+                    .arg(migrationLockPath));
+        case QLockFile::NoError:
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Configuration migration lock failed without an error: %1")
+                    .arg(migrationLockPath));
+        }
+    }
+
+    if (!migrationLockAcquired) {
         return Result<ConfigDocument>::failure(
             QStringLiteral("Cannot acquire configuration migration lock: %1")
                 .arg(migrationLockPath));
