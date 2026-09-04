@@ -23,6 +23,11 @@ private slots:
         QCOMPARE(calculateCpuUsage({100, 200, 300}, {200, 300, 300}), 0);
     }
 
+    void calculatesLowUtilizationWithoutCancellation()
+    {
+        QCOMPARE(calculateCpuUsage({0, 0, 0}, {98, 100, 0}), 2);
+    }
+
     void rejectsZeroTotalDelta()
     {
         QVERIFY(!calculateCpuUsage({100, 200, 300}, {100, 200, 300}).has_value());
@@ -49,10 +54,9 @@ private slots:
         QCOMPARE(calculateCpuUsage({0, 0, 0}, {10, 1, 0}), 0);
 
         const auto maximum = std::numeric_limits<std::uint64_t>::max();
-        const auto usage = calculateCpuUsage({0, 0, 0}, {maximum, maximum, maximum});
-        QVERIFY(usage.has_value());
-        QVERIFY(*usage >= 0);
-        QVERIFY(*usage <= 100);
+        QCOMPARE(
+            calculateCpuUsage({0, 0, 0}, {maximum, maximum, maximum}),
+            50);
     }
 };
 

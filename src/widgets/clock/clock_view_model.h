@@ -40,7 +40,12 @@ signals:
     void timeTextChanged();
 
 private:
+    static constexpr qint64 preciseWindowMs = 3000;
+
+    void onTimerTimeout();
+    void updateTimeText(const QDateTime& now);
     void scheduleNextMinute(const QDateTime& now);
+    void armTimer(qint64 intervalMs, Qt::TimerType timerType);
 
     Core::WidgetConfig m_config;
     ClockNowProvider m_nowProvider;
@@ -48,6 +53,7 @@ private:
     QTimeZone m_timeZone;
     QString m_format;
     QString m_timeText{QStringLiteral("--:--")};
+    QDateTime m_nextMinuteTarget;
 };
 
 } // namespace Widgets

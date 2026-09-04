@@ -63,6 +63,12 @@ std::unique_ptr<CountingCpuDataSource> sourceWith(
     return source;
 }
 
+bool fireSingleShotTimer(QTimer* timer)
+{
+    timer->stop();
+    return QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection);
+}
+
 } // namespace
 
 class WidgetInstancesTest final : public QObject {
@@ -144,6 +150,54 @@ private slots:
         QCOMPARE(first.maxFrequencyMHz(), 4000);
     }
 
+    void cpuViewModelCachesValuesAfterServiceDestruction()
+    {
+        auto source = sourceWith(
+            {{Platform::CpuTimes{0, 0, 0}}, {Platform::CpuTimes{50, 100, 0}}},
+            {{1.0}, {0.5}});
+        auto service = std::make_unique<Platform::CpuService>(std::move(source));
+        service->sampleNow();
+
+        auto viewModel = std::make_unique<Widgets::CpuViewModel>(
+            Core::WidgetConfig{"cpu", "Cpu", 0, QJsonObject{{"label", "safe"}}},
+            *service);
+        QSignalSpy cpuChanged(viewModel.get(), &Widgets::CpuViewModel::cpuPercentChanged);
+        QSignalSpy frequencyChanged(
+            viewModel.get(), &Widgets::CpuViewModel::currentFrequencyMHzChanged);
+        QSignalSpy historyChanged(viewModel.get(), &Widgets::CpuViewModel::historyChanged);
+
+        service->sampleNow();
+
+        QCOMPARE(cpuChanged.count(), 1);
+        QCOMPARE(frequencyChanged.count(), 1);
+        QCOMPARE(historyChanged.count(), 1);
+        const QVariantList expectedHistory{50};
+        QCOMPARE(viewModel->cpuPercent(), 50);
+        QCOMPARE(viewModel->currentFrequencyMHz(), 2000);
+        QCOMPARE(viewModel->history(), expectedHistory);
+
+        service.reset();
+
+        QCOMPARE(viewModel->cpuPercent(), 50);
+        QCOMPARE(viewModel->currentFrequencyMHz(), 2000);
+        QCOMPARE(viewModel->maxFrequencyMHz(), 4000);
+        QCOMPARE(viewModel->physicalCores(), 8);
+        QCOMPARE(viewModel->logicalCores(), 16);
+        QCOMPARE(viewModel->history(), expectedHistory);
+        QCOMPARE(viewModel->property("cpuPercent").toInt(), 50);
+        QCOMPARE(viewModel->property("currentFrequencyMHz").toInt(), 2000);
+        QCOMPARE(viewModel->property("maxFrequencyMHz").toInt(), 4000);
+        QCOMPARE(viewModel->property("physicalCores").toInt(), 8);
+        QCOMPARE(viewModel->property("logicalCores").toInt(), 16);
+        QCOMPARE(viewModel->property("history").toList(), expectedHistory);
+        QCOMPARE(viewModel->property("instanceId").toString(), QString("cpu"));
+        const QJsonObject expectedSettings{{"label", "safe"}};
+        QCOMPARE(viewModel->property("settings").toJsonObject(), expectedSettings);
+        QCOMPARE(cpuChanged.count(), 1);
+        QCOMPARE(frequencyChanged.count(), 1);
+        QCOMPARE(historyChanged.count(), 1);
+    }
+
     void invalidCpuSamplesPreserveLastGoodBaseline()
     {
         auto source = sourceWith({
@@ -153,6 +207,7 @@ private slots:
             {Platform::CpuTimes{90, 250, 350}},
             {Platform::CpuTimes{150, 300, 400}},
         });
+        auto* const counts = source.get();
         Platform::CpuService service(std::move(source));
         QSignalSpy historyChanged(&service, &Platform::CpuService::historyChanged);
 
@@ -167,6 +222,8 @@ private slots:
         QCOMPARE(service.cpuPercent(), 75);
         QCOMPARE(service.history(), QVariantList{75});
         QCOMPARE(historyChanged.count(), 1);
+        QCOMPARE(counts->timesCalls, 5);
+        QCOMPARE(counts->ratioCalls, 5);
     }
 
     void scalarSignalsOnlyOnChangeButHistorySignalsForEveryCalculatedSample()
@@ -190,21 +247,127 @@ private slots:
         QCOMPARE(service.history(), QVariantList({50, 50}));
     }
 
-    void cpuServiceStartAndStopAreIdempotent()
+    void cpuHistoryRollsOverInOldestToNewestOrder()
+    {
+        auto source = std::make_unique<CountingCpuDataSource>();
+        Platform::CpuTimes current{};
+        source->times.push_back(current);
+        for (int usage = 0; usage < 32; ++usage) {
+            current.idle += static_cast<std::uint64_t>(100 - usage);
+            current.kernel += 100;
+            source->times.push_back(current);
+        }
+        auto* const counts = source.get();
+        Platform::CpuService service(std::move(source));
+
+        for (int sample = 0; sample < 33; ++sample) {
+            service.sampleNow();
+        }
+
+        QVariantList expected;
+        for (int usage = 2; usage < 32; ++usage) {
+            expected.append(usage);
+        }
+        QCOMPARE(counts->timesCalls, 33);
+        QCOMPARE(service.history().size(), 30);
+        QCOMPARE(service.history(), expected);
+        const QVariantList* const cachedHistory = &service.history();
+        QCOMPARE(&service.history(), cachedHistory);
+    }
+
+    void failedTopologyUsesZeroFallbacks()
     {
         auto source = sourceWith({});
+        auto* const counts = source.get();
+        source->cpuTopology = std::nullopt;
+        Platform::CpuService service(std::move(source));
+        Widgets::CpuViewModel viewModel(
+            Core::WidgetConfig{"cpu", "Cpu", 0, {}}, service);
+
+        QCOMPARE(counts->topologyCalls, 1);
+        QCOMPARE(service.maxFrequencyMHz(), 0);
+        QCOMPARE(service.physicalCores(), 0);
+        QCOMPARE(service.logicalCores(), 0);
+        QCOMPARE(viewModel.maxFrequencyMHz(), 0);
+        QCOMPARE(viewModel.physicalCores(), 0);
+        QCOMPARE(viewModel.logicalCores(), 0);
+    }
+
+    void cpuServiceStartPrimesOnceAndIsIdempotent()
+    {
+        auto source = sourceWith(
+            {{Platform::CpuTimes{0, 0, 0}}, {Platform::CpuTimes{50, 100, 0}}},
+            {{1.0}, {0.5}});
+        auto* const counts = source.get();
         Platform::CpuService service(std::move(source));
         auto* const timer = service.findChild<QTimer*>();
         QVERIFY(timer != nullptr);
         QVERIFY(!timer->isActive());
 
         service.start();
-        service.start();
+        QCOMPARE(counts->timesCalls, 1);
+        QCOMPARE(counts->ratioCalls, 1);
         QVERIFY(timer->isActive());
+
+        service.start();
+        QCOMPARE(counts->timesCalls, 1);
+        QCOMPARE(counts->ratioCalls, 1);
+        QVERIFY(timer->isActive());
+
+        service.sampleNow();
+        QCOMPARE(service.cpuPercent(), 50);
 
         service.stop();
         service.stop();
         QVERIFY(!timer->isActive());
+    }
+
+    void cpuServiceWithNullSourceNeverStarts()
+    {
+        Platform::CpuService service(std::unique_ptr<Platform::CpuDataSource>{});
+        auto* const timer = service.findChild<QTimer*>();
+        QVERIFY(timer != nullptr);
+
+        service.start();
+        service.start();
+
+        QVERIFY(!timer->isActive());
+        QCOMPARE(service.cpuPercent(), 0);
+        QCOMPARE(service.currentFrequencyMHz(), 0);
+        QCOMPARE(service.history(), QVariantList{});
+    }
+
+    void cpuServiceRestartPrimesAFreshBaseline()
+    {
+        auto source = sourceWith(
+            {{Platform::CpuTimes{0, 0, 0}},
+             {Platform::CpuTimes{50, 100, 0}},
+             {Platform::CpuTimes{1000, 2000, 0}},
+             {Platform::CpuTimes{1010, 2100, 0}}},
+            {{1.0}, {0.5}, {0.75}, {0.8}});
+        auto* const counts = source.get();
+        Platform::CpuService service(std::move(source));
+
+        service.start();
+        service.sampleNow();
+        QCOMPARE(service.cpuPercent(), 50);
+        QCOMPARE(service.history(), QVariantList{50});
+
+        service.stop();
+        service.start();
+        service.start();
+
+        QCOMPARE(counts->timesCalls, 3);
+        QCOMPARE(counts->ratioCalls, 3);
+        QCOMPARE(service.cpuPercent(), 50);
+        QCOMPARE(service.history(), QVariantList{50});
+
+        service.sampleNow();
+
+        QCOMPARE(counts->timesCalls, 4);
+        QCOMPARE(counts->ratioCalls, 4);
+        QCOMPARE(service.cpuPercent(), 90);
+        QCOMPARE(service.history(), QVariantList({50, 90}));
     }
 
     void clockViewModelsHaveIndependentSettingsAndTimers()
@@ -261,6 +424,62 @@ private slots:
             clock.timeText(),
             now.toTimeZone(QTimeZone::systemTimeZone()).toString("HH:mm"));
         QCOMPARE(changed.count(), 1);
+    }
+
+    void clockEarlyTimeoutWaitsForStoredMinuteTarget()
+    {
+        QDateTime now(
+            QDate(2026, 9, 4), QTime(12, 34, 56, 789), QTimeZone("UTC"));
+        Widgets::ClockViewModel clock(
+            Core::WidgetConfig{
+                "clock", "Clock", 0,
+                QJsonObject{{"format", "HH:mm:ss.zzz"}, {"timeZone", "UTC"}}},
+            [&now] { return now; });
+        auto* const timer = clock.findChild<QTimer*>();
+        QVERIFY(timer != nullptr);
+        QCOMPARE(clock.timeText(), QString("12:34:56.789"));
+        QCOMPARE(timer->timerType(), Qt::CoarseTimer);
+        QCOMPARE(timer->interval(), 3211);
+        QSignalSpy changed(&clock, &Widgets::ClockViewModel::timeTextChanged);
+
+        now = QDateTime(
+            QDate(2026, 9, 4), QTime(12, 34, 59, 900), QTimeZone("UTC"));
+        QVERIFY(fireSingleShotTimer(timer));
+
+        QCOMPARE(clock.timeText(), QString("12:34:56.789"));
+        QCOMPARE(changed.count(), 0);
+        QVERIFY(timer->isActive());
+        QVERIFY(timer->isSingleShot());
+        QCOMPARE(timer->timerType(), Qt::PreciseTimer);
+        QCOMPARE(timer->interval(), 100);
+
+        now = QDateTime(
+            QDate(2026, 9, 4), QTime(12, 35, 0, 0), QTimeZone("UTC"));
+        QVERIFY(fireSingleShotTimer(timer));
+
+        QCOMPARE(clock.timeText(), QString("12:35:00.000"));
+        QCOMPARE(changed.count(), 1);
+        QVERIFY(timer->isActive());
+        QCOMPARE(timer->timerType(), Qt::CoarseTimer);
+        QCOMPARE(timer->interval(), 60000);
+    }
+
+    void clockUsesPreciseTimerForShortMillisecondRemainder()
+    {
+        const QDateTime now(
+            QDate(2026, 9, 4), QTime(12, 34, 59, 875), QTimeZone("UTC"));
+        Widgets::ClockViewModel clock(
+            Core::WidgetConfig{
+                "clock", "Clock", 0,
+                QJsonObject{{"format", "HH:mm"}, {"timeZone", "UTC"}}},
+            [now] { return now; });
+        auto* const timer = clock.findChild<QTimer*>();
+        QVERIFY(timer != nullptr);
+
+        QVERIFY(timer->isActive());
+        QVERIFY(timer->isSingleShot());
+        QCOMPARE(timer->timerType(), Qt::PreciseTimer);
+        QCOMPARE(timer->interval(), 125);
     }
 };
 

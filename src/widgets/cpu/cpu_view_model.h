@@ -5,6 +5,7 @@
 #include "widgets/i_widget_view_model.h"
 
 #include <QJsonObject>
+#include <QPointer>
 #include <QString>
 #include <QVariantList>
 
@@ -31,15 +32,12 @@ public:
 
     [[nodiscard]] const QString& instanceId() const noexcept { return m_config.id; }
     [[nodiscard]] const QJsonObject& settings() const noexcept { return m_config.settings; }
-    [[nodiscard]] int cpuPercent() const noexcept { return m_service.cpuPercent(); }
-    [[nodiscard]] int currentFrequencyMHz() const noexcept
-    {
-        return m_service.currentFrequencyMHz();
-    }
-    [[nodiscard]] int maxFrequencyMHz() const noexcept { return m_service.maxFrequencyMHz(); }
-    [[nodiscard]] int physicalCores() const noexcept { return m_service.physicalCores(); }
-    [[nodiscard]] int logicalCores() const noexcept { return m_service.logicalCores(); }
-    [[nodiscard]] const QVariantList& history() const noexcept { return m_service.history(); }
+    [[nodiscard]] int cpuPercent() const noexcept { return m_cpuPercent; }
+    [[nodiscard]] int currentFrequencyMHz() const noexcept { return m_currentFrequencyMHz; }
+    [[nodiscard]] int maxFrequencyMHz() const noexcept { return m_maxFrequencyMHz; }
+    [[nodiscard]] int physicalCores() const noexcept { return m_physicalCores; }
+    [[nodiscard]] int logicalCores() const noexcept { return m_logicalCores; }
+    [[nodiscard]] const QVariantList& history() const noexcept { return m_history; }
 
     [[nodiscard]] int GetSpan() const override { return 2; }
     [[nodiscard]] std::string GetKind() const override { return "Cpu"; }
@@ -51,8 +49,18 @@ signals:
     void historyChanged();
 
 private:
+    void syncCpuPercent();
+    void syncCurrentFrequency();
+    void syncHistory();
+
     Core::WidgetConfig m_config;
-    Platform::CpuService& m_service;
+    QPointer<Platform::CpuService> m_service;
+    QVariantList m_history;
+    int m_cpuPercent{};
+    int m_currentFrequencyMHz{};
+    int m_maxFrequencyMHz{};
+    int m_physicalCores{};
+    int m_logicalCores{};
 };
 
 } // namespace Widgets

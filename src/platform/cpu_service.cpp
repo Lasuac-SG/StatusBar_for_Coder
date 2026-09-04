@@ -196,9 +196,13 @@ CpuService::~CpuService() = default;
 
 void CpuService::start()
 {
-    if (!m_timer.isActive()) {
-        m_timer.start();
+    if (m_source == nullptr || m_timer.isActive()) {
+        return;
     }
+
+    m_previousTimes.reset();
+    sampleNow();
+    m_timer.start();
 }
 
 void CpuService::stop()

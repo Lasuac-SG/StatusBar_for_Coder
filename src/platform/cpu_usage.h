@@ -32,9 +32,9 @@ struct CpuTimes final {
 
     const auto total = static_cast<long double>(kernelDelta)
         + static_cast<long double>(userDelta);
-    const auto idleRatio = static_cast<long double>(idleDelta) / total;
-    const auto busyRatio = std::clamp(1.0L - idleRatio, 0.0L, 1.0L);
-    return static_cast<int>(busyRatio * 100.0L);
+    const auto busy = std::clamp(
+        total - static_cast<long double>(idleDelta), 0.0L, total);
+    return static_cast<int>((busy * 100.0L) / total);
 }
 
 } // namespace Platform

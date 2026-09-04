@@ -1,6 +1,7 @@
 #include "widgets/clock/clock_view_model.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace Widgets {
@@ -51,7 +52,7 @@ ClockViewModel::ClockViewModel(
     }
     m_timer.setSingleShot(true);
     m_timer.setTimerType(Qt::CoarseTimer);
-    connect(&m_timer, &QTimer::timeout, this, &ClockViewModel::Update);
+    connect(&m_timer, &QTimer::timeout, this, &ClockViewModel::onTimerTimeout);
     Update();
 }
 
@@ -59,23 +60,62 @@ void ClockViewModel::Update()
 {
     const QDateTime now = m_nowProvider();
     if (!now.isValid()) {
-        m_timer.start(60000);
+        m_nextMinuteTarget = {};
+        armTimer(60000, Qt::CoarseTimer);
         return;
     }
 
+    updateTimeText(now);
+    scheduleNextMinute(now);
+}
+
+void ClockViewModel::onTimerTimeout()
+{
+    const QDateTime now = m_nowProvider();
+    if (!now.isValid() || !m_nextMinuteTarget.isValid()) {
+        Update();
+        return;
+    }
+
+    const qint64 remaining = now.msecsTo(m_nextMinuteTarget);
+    if (remaining > 0) {
+        armTimer(remaining, Qt::PreciseTimer);
+        return;
+    }
+
+    updateTimeText(now);
+    scheduleNextMinute(now);
+}
+
+void ClockViewModel::updateTimeText(const QDateTime& now)
+{
     const QString text = now.toTimeZone(m_timeZone).toString(m_format);
     if (m_timeText != text) {
         m_timeText = text;
         emit timeTextChanged();
     }
-    scheduleNextMinute(now);
 }
 
 void ClockViewModel::scheduleNextMinute(const QDateTime& now)
 {
     const QTime time = now.time();
     const int elapsedInMinute = time.second() * 1000 + time.msec();
-    m_timer.start(std::max(1, 60000 - elapsedInMinute));
+    const qint64 remaining = std::max(1, 60000 - elapsedInMinute);
+    m_nextMinuteTarget = now.addMSecs(remaining);
+    armTimer(
+        remaining,
+        remaining <= preciseWindowMs ? Qt::PreciseTimer : Qt::CoarseTimer);
+}
+
+void ClockViewModel::armTimer(const qint64 intervalMs, const Qt::TimerType timerType)
+{
+    const qint64 bounded = std::clamp(
+        intervalMs,
+        qint64{1},
+        static_cast<qint64>(std::numeric_limits<int>::max()));
+    m_timer.stop();
+    m_timer.setTimerType(timerType);
+    m_timer.start(static_cast<int>(bounded));
 }
 
 } // namespace Widgets

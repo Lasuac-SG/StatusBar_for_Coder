@@ -10,23 +10,57 @@ CpuViewModel::CpuViewModel(
     QObject* parent)
     : IWidgetViewModel(parent)
     , m_config(std::move(config))
-    , m_service(service)
+    , m_service(&service)
+    , m_history(service.history())
+    , m_cpuPercent(service.cpuPercent())
+    , m_currentFrequencyMHz(service.currentFrequencyMHz())
+    , m_maxFrequencyMHz(service.maxFrequencyMHz())
+    , m_physicalCores(service.physicalCores())
+    , m_logicalCores(service.logicalCores())
 {
     connect(
-        &m_service,
+        &service,
         &Platform::CpuService::cpuPercentChanged,
         this,
-        &CpuViewModel::cpuPercentChanged);
+        &CpuViewModel::syncCpuPercent);
     connect(
-        &m_service,
+        &service,
         &Platform::CpuService::currentFrequencyMHzChanged,
         this,
-        &CpuViewModel::currentFrequencyMHzChanged);
+        &CpuViewModel::syncCurrentFrequency);
     connect(
-        &m_service,
+        &service,
         &Platform::CpuService::historyChanged,
         this,
-        &CpuViewModel::historyChanged);
+        &CpuViewModel::syncHistory);
+}
+
+void CpuViewModel::syncCpuPercent()
+{
+    if (m_service == nullptr || m_cpuPercent == m_service->cpuPercent()) {
+        return;
+    }
+    m_cpuPercent = m_service->cpuPercent();
+    emit cpuPercentChanged();
+}
+
+void CpuViewModel::syncCurrentFrequency()
+{
+    if (m_service == nullptr
+        || m_currentFrequencyMHz == m_service->currentFrequencyMHz()) {
+        return;
+    }
+    m_currentFrequencyMHz = m_service->currentFrequencyMHz();
+    emit currentFrequencyMHzChanged();
+}
+
+void CpuViewModel::syncHistory()
+{
+    if (m_service == nullptr || m_history == m_service->history()) {
+        return;
+    }
+    m_history = m_service->history();
+    emit historyChanged();
 }
 
 } // namespace Widgets
