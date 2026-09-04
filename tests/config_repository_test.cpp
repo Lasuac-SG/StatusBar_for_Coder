@@ -1,4 +1,5 @@
 #include "core/config_repository.h"
+#include "core/internal/config_repository_operations.h"
 #include "ui/widget_model.h"
 #include "widgets/registry_setup.h"
 
@@ -6,17 +7,18 @@
 
 #include <QFile>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLockFile>
 #include <QTemporaryDir>
-#include <QThread>
 #include <QUuid>
 
 #include <chrono>
+#include <condition_variable>
 #include <future>
+#include <memory>
+#include <mutex>
 #include <type_traits>
 
 namespace {
@@ -47,6 +49,100 @@ public:
 
 private:
     QString original_;
+};
+
+class ControlledLockOperations final : public Core::Internal::ConfigRepositoryOperations {
+public:
+    ControlledLockOperations()
+        : delegate_(Core::Internal::defaultConfigRepositoryOperations())
+    {
+    }
+
+    Core::Internal::LockAttemptResult attemptMigrationLock(
+        QLockFile&,
+        int) override
+    {
+        std::unique_lock lock(mutex_);
+        ++lockAttempts_;
+        stateChanged_.notify_all();
+        if (lockAttempts_ == 2) {
+            stateChanged_.wait(lock, [this] { return releaseSecondAttempt_; });
+        }
+        return {false, QLockFile::LockFailedError};
+    }
+
+    Core::Result<void> atomicWrite(const QString& path, const QByteArray& bytes) override
+    {
+        return delegate_->atomicWrite(path, bytes);
+    }
+
+    bool waitForLockAttempts(int expected)
+    {
+        using namespace std::chrono_literals;
+        std::unique_lock lock(mutex_);
+        return stateChanged_.wait_for(
+            lock, 5s, [this, expected] { return lockAttempts_ >= expected; });
+    }
+
+    void releaseSecondAttempt()
+    {
+        std::lock_guard lock(mutex_);
+        releaseSecondAttempt_ = true;
+        stateChanged_.notify_all();
+    }
+
+    int lockAttempts() const
+    {
+        std::lock_guard lock(mutex_);
+        return lockAttempts_;
+    }
+
+private:
+    std::shared_ptr<Core::Internal::ConfigRepositoryOperations> delegate_;
+    mutable std::mutex mutex_;
+    std::condition_variable stateChanged_;
+    int lockAttempts_{};
+    bool releaseSecondAttempt_{};
+};
+
+class FailFirstDestinationWriteOperations final
+    : public Core::Internal::ConfigRepositoryOperations {
+public:
+    explicit FailFirstDestinationWriteOperations(QString destination)
+        : delegate_(Core::Internal::defaultConfigRepositoryOperations())
+        , destination_(std::move(destination))
+    {
+    }
+
+    Core::Internal::LockAttemptResult attemptMigrationLock(
+        QLockFile& lock,
+        int timeoutMs) override
+    {
+        return delegate_->attemptMigrationLock(lock, timeoutMs);
+    }
+
+    Core::Result<void> atomicWrite(const QString& path, const QByteArray& bytes) override
+    {
+        if (path == destination_) {
+            ++destinationWriteAttempts_;
+            if (destinationWriteAttempts_ == 1) {
+                return Core::Result<void>::failure(
+                    QStringLiteral("Injected destination write failure"));
+            }
+        } else {
+            ++backupWriteAttempts_;
+        }
+        return delegate_->atomicWrite(path, bytes);
+    }
+
+    int destinationWriteAttempts() const noexcept { return destinationWriteAttempts_; }
+    int backupWriteAttempts() const noexcept { return backupWriteAttempts_; }
+
+private:
+    std::shared_ptr<Core::Internal::ConfigRepositoryOperations> delegate_;
+    QString destination_;
+    int destinationWriteAttempts_{};
+    int backupWriteAttempts_{};
 };
 
 } // namespace
@@ -294,8 +390,6 @@ private slots:
 
     void loadsDestinationCreatedAfterInitialLockTimeout()
     {
-        using namespace std::chrono_literals;
-
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 
@@ -303,19 +397,15 @@ private slots:
         const QString legacy = directory.filePath("legacy.json");
         QVERIFY(writeBytes(legacy, R"({"widgets":[{"name":"Clock","slot":2}]})"));
 
-        QLockFile heldLock(destination + ".migration.lock");
-        heldLock.setStaleLockTime(30'000);
-        QVERIFY(heldLock.tryLock(0));
-
-        const Core::ConfigRepository repository(destination, {legacy});
-        std::promise<void> loadStarted;
-        auto started = loadStarted.get_future();
-        auto pendingLoad = std::async(std::launch::async, [&repository, &loadStarted] {
-            loadStarted.set_value();
+        auto operations = std::make_shared<ControlledLockOperations>();
+        const auto repository = Core::Internal::makeConfigRepository(
+            destination, {legacy}, operations);
+        auto pendingLoad = std::async(std::launch::async, [&repository] {
             return repository.load();
         });
-        started.wait();
-        QCOMPARE(pendingLoad.wait_for(650ms), std::future_status::timeout);
+        QVERIFY2(operations->waitForLockAttempts(2),
+                 "repository did not enter its second lock attempt");
+        QCOMPARE(operations->lockAttempts(), 2);
 
         const QJsonObject concurrentDestination{
             {"version", 1},
@@ -326,14 +416,15 @@ private slots:
                             {"settings", QJsonObject{{"source", "other-instance"}}},
                         }}},
         };
-        QVERIFY(writeBytes(
-            destination, QJsonDocument(concurrentDestination).toJson(QJsonDocument::Compact)));
-        QVERIFY(heldLock.isLocked());
+        const bool destinationWritten = writeBytes(
+            destination, QJsonDocument(concurrentDestination).toJson(QJsonDocument::Compact));
+        operations->releaseSecondAttempt();
+        QVERIFY(destinationWritten);
 
         const auto result = pendingLoad.get();
         QVERIFY2(result.hasValue(), qPrintable(result.error()));
         QCOMPARE(result.value().widgets.front().id, QString("created-concurrently"));
-        QVERIFY(heldLock.isLocked());
+        QCOMPARE(operations->lockAttempts(), 2);
         QVERIFY(!QFile::exists(directory.filePath("config.legacy.backup.json")));
         QVERIFY(QFile::exists(legacy));
     }
@@ -343,49 +434,33 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 
-        constexpr int widgetCount = 50'000;
-        QByteArray legacyBytes = R"({"widgets":[)";
-        for (int index = 0; index < widgetCount; ++index) {
-            if (index != 0) {
-                legacyBytes.append(',');
-            }
-            legacyBytes.append(R"({"name":"Clock","slot":)");
-            legacyBytes.append(QByteArray::number(index));
-            legacyBytes.append('}');
-        }
-        legacyBytes.append("]}");
-
         const QString destination = directory.filePath("config.json");
         const QString legacy = directory.filePath("legacy.json");
         const QString backup = directory.filePath("config.legacy.backup.json");
+        const QByteArray legacyBytes = R"({"widgets":[{"name":"Clock","slot":2}]})";
         QVERIFY(writeBytes(legacy, legacyBytes));
 
-        const Core::ConfigRepository repository(destination, {legacy});
-        auto pendingLoad = std::async(std::launch::async, [&repository] {
-            return repository.load();
-        });
+        auto operations = std::make_shared<FailFirstDestinationWriteOperations>(destination);
+        const auto repository = Core::Internal::makeConfigRepository(
+            destination, {legacy}, operations);
 
-        QElapsedTimer backupWait;
-        backupWait.start();
-        while (!QFileInfo::exists(backup) && backupWait.elapsed() < 10'000) {
-            QThread::yieldCurrentThread();
-        }
-        QVERIFY2(QFileInfo::exists(backup), "migration did not commit its backup in time");
-        QVERIFY(QDir().mkpath(destination));
-
-        const auto failed = pendingLoad.get();
+        const auto failed = repository.load();
         QVERIFY(!failed.hasValue());
+        QVERIFY2(failed.error().contains("Injected"), qPrintable(failed.error()));
         QCOMPARE(readBytes(legacy), legacyBytes);
         QCOMPARE(readBytes(backup), legacyBytes);
-        QVERIFY(QFileInfo(destination).isDir());
+        QVERIFY(!QFileInfo::exists(destination));
+        QCOMPARE(operations->destinationWriteAttempts(), 1);
+        QCOMPARE(operations->backupWriteAttempts(), 1);
 
-        QVERIFY(QDir().rmdir(destination));
         const auto retried = repository.load();
         QVERIFY2(retried.hasValue(), qPrintable(retried.error()));
-        QCOMPARE(retried.value().widgets.size(), widgetCount);
+        QCOMPARE(retried.value().widgets.size(), 1);
         QCOMPARE(readBytes(legacy), legacyBytes);
         QCOMPARE(readBytes(backup), legacyBytes);
         QVERIFY(QFileInfo(destination).isFile());
+        QCOMPARE(operations->destinationWriteAttempts(), 2);
+        QCOMPARE(operations->backupWriteAttempts(), 1);
     }
 
     void usesFirstExistingLegacyCandidate()

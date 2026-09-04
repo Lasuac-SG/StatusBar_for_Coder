@@ -1,4 +1,5 @@
 #include "core/config_repository.h"
+#include "core/internal/config_repository_operations.h"
 
 #include <QDir>
 #include <QFile>
@@ -46,7 +47,7 @@ Result<void> ensureParentDirectory(const QString& path)
     return Result<void>::success();
 }
 
-Result<void> atomicallyWrite(const QString& path, const QByteArray& bytes)
+Result<void> atomicallyWriteWithQSaveFile(const QString& path, const QByteArray& bytes)
 {
     const auto directoryResult = ensureParentDirectory(path);
     if (!directoryResult.hasValue()) {
@@ -291,10 +292,40 @@ bool pathsMatch(const QString& left, const QString& right)
 #endif
 }
 
+class QtConfigRepositoryOperations final : public Internal::ConfigRepositoryOperations {
+public:
+    Internal::LockAttemptResult attemptMigrationLock(
+        QLockFile& lock,
+        int timeoutMs) override
+    {
+        if (lock.tryLock(timeoutMs)) {
+            return {true, QLockFile::NoError};
+        }
+        return {false, lock.error()};
+    }
+
+    Result<void> atomicWrite(const QString& path, const QByteArray& bytes) override
+    {
+        return atomicallyWriteWithQSaveFile(path, bytes);
+    }
+};
+
 } // namespace
 
 ConfigRepository::ConfigRepository(QString configPath, QStringList legacyCandidates)
+    : ConfigRepository(
+          std::move(configPath),
+          std::move(legacyCandidates),
+          Internal::defaultConfigRepositoryOperations())
+{
+}
+
+ConfigRepository::ConfigRepository(
+    QString configPath,
+    QStringList legacyCandidates,
+    std::shared_ptr<Internal::ConfigRepositoryOperations> operations)
     : configPath_(cleanAbsolutePath(configPath))
+    , operations_(std::move(operations))
 {
     for (const QString& candidate : legacyCandidates) {
         if (candidate.isEmpty()) {
@@ -344,12 +375,14 @@ Result<ConfigDocument> ConfigRepository::load() const
     constexpr int migrationLockAttempts = 2;
     bool migrationLockAcquired = false;
     for (int attempt = 0; attempt < migrationLockAttempts; ++attempt) {
-        if (migrationLock.tryLock(migrationLockAttemptMs)) {
+        const auto lockAttempt =
+            operations_->attemptMigrationLock(migrationLock, migrationLockAttemptMs);
+        if (lockAttempt.acquired) {
             migrationLockAcquired = true;
             break;
         }
 
-        switch (migrationLock.error()) {
+        switch (lockAttempt.error) {
         case QLockFile::LockFailedError:
             if (QFileInfo::exists(configPath_)) {
                 return loadDestination();
@@ -429,7 +462,7 @@ Result<ConfigDocument> ConfigRepository::load() const
     }
 
     if (!QFileInfo::exists(backupPath)) {
-        const auto backupResult = atomicallyWrite(backupPath, legacyBytes.value());
+        const auto backupResult = operations_->atomicWrite(backupPath, legacyBytes.value());
         if (!backupResult.hasValue()) {
             return Result<ConfigDocument>::failure(backupResult.error());
         }
@@ -448,12 +481,31 @@ Result<void> ConfigRepository::save(const ConfigDocument& document) const
     if (!validation.hasValue()) {
         return validation;
     }
-    return atomicallyWrite(configPath_, serialize(document));
+    return operations_->atomicWrite(configPath_, serialize(document));
 }
 
 const QString& ConfigRepository::path() const noexcept
 {
     return configPath_;
 }
+
+namespace Internal {
+
+std::shared_ptr<ConfigRepositoryOperations> defaultConfigRepositoryOperations()
+{
+    static const auto operations = std::make_shared<QtConfigRepositoryOperations>();
+    return operations;
+}
+
+ConfigRepository makeConfigRepository(
+    QString configPath,
+    QStringList legacyCandidates,
+    std::shared_ptr<ConfigRepositoryOperations> operations)
+{
+    return ConfigRepository(
+        std::move(configPath), std::move(legacyCandidates), std::move(operations));
+}
+
+} // namespace Internal
 
 } // namespace Core
