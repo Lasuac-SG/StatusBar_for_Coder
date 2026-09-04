@@ -88,6 +88,9 @@ Window {
                             if (model.kind === "Cpu") return "qrc:/src/widgets/cpu/CpuWidget.qml"
                             return ""
                         }
+                        onLoaded: {
+                            if (item) item.viewModel = model.viewModel
+                        }
                     }
 
                     MouseArea {

@@ -5,11 +5,15 @@
 
 namespace Widgets {
     void RegisterAllWidgets() {
-        WidgetRegistry::GetInstance().Register("Clock", []() -> std::unique_ptr<IWidgetViewModel> {
-            return std::make_unique<ClockViewModel>();
+        WidgetRegistry::GetInstance().Register("Clock", [](
+            const Core::WidgetConfig& config,
+            Platform::CpuService&) -> std::unique_ptr<IWidgetViewModel> {
+            return std::make_unique<ClockViewModel>(config);
         });
-        WidgetRegistry::GetInstance().Register("Cpu", []() -> std::unique_ptr<IWidgetViewModel> {
-            return std::make_unique<CpuViewModel>();
+        WidgetRegistry::GetInstance().Register("Cpu", [](
+            const Core::WidgetConfig& config,
+            Platform::CpuService& service) -> std::unique_ptr<IWidgetViewModel> {
+            return std::make_unique<CpuViewModel>(config, service);
         });
     }
 }

@@ -5,6 +5,7 @@ import Theme 1.0
 Item {
     id: widgetRoot
     anchors.fill: parent
+    property var viewModel
 
     readonly property bool inEditing: Window.window ? Window.window.isEditing : false
 
@@ -44,8 +45,8 @@ Item {
 
         Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: cpuAdapter.cpuPercent + "%"
-            color: cpuAdapter.cpuPercent > 85 ? "#ff5555" : "#e6e6e6"
+            text: (widgetRoot.viewModel ? widgetRoot.viewModel.cpuPercent : 0) + "%"
+            color: widgetRoot.viewModel && widgetRoot.viewModel.cpuPercent > 85 ? "#ff5555" : "#e6e6e6"
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSm
             font.weight: Theme.weightLight
@@ -55,6 +56,7 @@ Item {
 
     CpuDetailPopup {
         id: detailPopup
+        viewModel: widgetRoot.viewModel
     }
 
     MouseArea {

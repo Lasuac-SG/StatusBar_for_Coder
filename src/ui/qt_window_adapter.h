@@ -3,7 +3,6 @@
 #include "ui/widget_model.h"
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
-#include <QTimer>
 #include <memory>
 
 namespace UI {
@@ -19,6 +18,5 @@ namespace UI {
         std::unique_ptr<QGuiApplication> m_app;
         std::unique_ptr<QQmlApplicationEngine> m_engine;
         std::unique_ptr<WidgetModel> m_widgetModel;
-        QTimer m_updateTimer;
     };
 }

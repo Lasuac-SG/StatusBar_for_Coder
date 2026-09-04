@@ -11,6 +11,7 @@ Window {
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
 
     property bool isPinned: false
+    property var viewModel
     signal closed()
 
     onActiveChanged: {
@@ -109,7 +110,7 @@ Window {
                     anchors.fill: parent
 
                     Connections {
-                        target: cpuAdapter
+                        target: popupWindow.viewModel
                         function onHistoryChanged() {
                             waveCanvas.requestPaint()
                         }
@@ -135,7 +136,7 @@ Window {
                             ctx.stroke()
                         }
 
-                        var points = cpuAdapter.history
+                        var points = popupWindow.viewModel ? popupWindow.viewModel.history : []
                         if (!points || points.length < 2) return
 
                         var step = width / (points.length - 1)
@@ -193,7 +194,7 @@ Window {
                             font.pixelSize: Theme.fontXs
                         }
                         Text {
-                            text: cpuAdapter.cpuPercent + "%"
+                            text: (popupWindow.viewModel ? popupWindow.viewModel.cpuPercent : 0) + "%"
                             color: "#ffffff"
                             font.family: Theme.fontMono
                             font.pixelSize: Theme.fontLg
@@ -219,7 +220,7 @@ Window {
                             font.pixelSize: Theme.fontXs
                         }
                         Text {
-                            text: cpuAdapter.currentFreq + " MHz"
+                            text: (popupWindow.viewModel ? popupWindow.viewModel.currentFrequencyMHz : 0) + " MHz"
                             color: "#ffffff"
                             font.family: Theme.fontMono
                             font.pixelSize: Theme.fontLg
@@ -245,7 +246,9 @@ Window {
                             font.pixelSize: Theme.fontXs
                         }
                         Text {
-                            text: cpuAdapter.physicalCores + " / " + cpuAdapter.logicalCores
+                            text: popupWindow.viewModel
+                                ? popupWindow.viewModel.physicalCores + " / " + popupWindow.viewModel.logicalCores
+                                : "0 / 0"
                             color: "#ffffff"
                             font.family: Theme.fontMono
                             font.pixelSize: Theme.fontLg
@@ -271,7 +274,7 @@ Window {
                             font.pixelSize: Theme.fontXs
                         }
                         Text {
-                            text: cpuAdapter.maxFreq + " MHz"
+                            text: (popupWindow.viewModel ? popupWindow.viewModel.maxFrequencyMHz : 0) + " MHz"
                             color: "#ffffff"
                             font.family: Theme.fontMono
                             font.pixelSize: Theme.fontLg

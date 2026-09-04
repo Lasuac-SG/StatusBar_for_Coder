@@ -19,12 +19,12 @@ target_sources(statusbar_core PRIVATE
     src/core/layout_engine.cpp
     src/core/window_manager.cpp
     src/platform/appbar_proxy.cpp
+    src/platform/cpu_service.cpp
     src/platform/display.cpp
     src/platform/tray_icon.cpp
     src/ui/widget_model.cpp
-    src/widgets/clock/clock_adapter.h
     src/widgets/clock/clock_view_model.cpp
-    src/widgets/cpu/cpu_adapter.cpp
+    src/widgets/cpu/cpu_view_model.cpp
     src/widgets/registry_setup.cpp
 )
 target_link_libraries(statusbar_core

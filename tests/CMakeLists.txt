@@ -12,3 +12,12 @@ add_test(NAME layout_engine_test COMMAND layout_engine_test)
 qt_add_executable(config_repository_test config_repository_test.cpp)
 target_link_libraries(config_repository_test PRIVATE statusbar_core Qt6::Test)
 add_test(NAME config_repository_test COMMAND config_repository_test)
+
+qt_add_executable(cpu_usage_test cpu_usage_test.cpp)
+target_link_libraries(cpu_usage_test PRIVATE Qt6::Core Qt6::Test)
+target_include_directories(cpu_usage_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME cpu_usage_test COMMAND cpu_usage_test)
+
+qt_add_executable(widget_instances_test widget_instances_test.cpp)
+target_link_libraries(widget_instances_test PRIVATE statusbar_core Qt6::Test)
+add_test(NAME widget_instances_test COMMAND widget_instances_test)

@@ -2,6 +2,7 @@
 #include "core/config_repository.h"
 #include "core/layout_engine.h"
 #include "core/widget_config.h"
+#include "platform/cpu_service.h"
 #include "widgets/i_widget_view_model.h"
 
 #include <QAbstractListModel>
@@ -25,7 +26,8 @@ namespace UI {
         enum WidgetRoles {
             KindRole = Qt::UserRole + 1,
             SlotRole,
-            SpanRole
+            SpanRole,
+            ViewModelRole
         };
 
         explicit WidgetModel(Core::ConfigRepository repository, QObject* parent = nullptr);
@@ -52,6 +54,7 @@ namespace UI {
 
         Core::ConfigRepository m_repository;
         Core::ConfigDocument m_document;
+        std::unique_ptr<Platform::CpuService> m_cpuService;
         std::vector<WidgetInstance> m_instances;
         QString m_lastError;
     };

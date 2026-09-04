@@ -8,6 +8,8 @@ namespace UI {
     WidgetModel::WidgetModel(Core::ConfigRepository repository, QObject* parent)
         : QAbstractListModel(parent)
         , m_repository(std::move(repository))
+        , m_cpuService(std::make_unique<Platform::CpuService>(
+              std::make_unique<Platform::WindowsCpuDataSource>()))
     {
     }
 
@@ -23,6 +25,7 @@ namespace UI {
         if (role == KindRole) return QString::fromStdString(instance.vm->GetKind());
         if (role == SlotRole) return instance.slot;
         if (role == SpanRole) return instance.vm->GetSpan();
+        if (role == ViewModelRole) return QVariant::fromValue(static_cast<QObject*>(instance.vm.get()));
         
         return {};
     }
@@ -31,7 +34,8 @@ namespace UI {
         return {
             {KindRole, "kind"},
             {SlotRole, "slot"},
-            {SpanRole, "span"}
+            {SpanRole, "span"},
+            {ViewModelRole, "viewModel"}
         };
     }
 
@@ -47,7 +51,7 @@ namespace UI {
         const auto& registry = Widgets::WidgetRegistry::GetInstance();
 
         for (const auto& wConfig : loadedDocument.widgets) {
-            if (auto widget = registry.Create(wConfig.type.toStdString())) {
+            if (auto widget = registry.Create(wConfig, *m_cpuService)) {
                 loadedInstances.push_back(
                     WidgetInstance{std::move(widget), wConfig.slot, wConfig.id, wConfig.settings});
             }
@@ -57,6 +61,15 @@ namespace UI {
         m_document = std::move(loadedDocument);
         m_instances = std::move(loadedInstances);
         endResetModel();
+        const bool hasCpu = std::any_of(
+            m_instances.cbegin(), m_instances.cend(), [](const WidgetInstance& instance) {
+                return instance.vm->GetKind() == "Cpu";
+            });
+        if (hasCpu) {
+            m_cpuService->start();
+        } else {
+            m_cpuService->stop();
+        }
         setLastError({});
         return Core::Result<void>::success();
     }

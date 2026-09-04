@@ -1,7 +1,5 @@
 #include "ui/qt_window_adapter.h"
 #include "core/window_manager.h"
-#include "widgets/clock/clock_adapter.h"
-#include "widgets/cpu/cpu_adapter.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QQmlContext>
@@ -43,8 +41,6 @@ namespace UI {
 
         m_engine->rootContext()->setContextProperty("reservedBarHeight", static_cast<int>(Core::WindowManager::LOGICAL_BAR_HEIGHT));
         m_engine->rootContext()->setContextProperty("widgetModel", m_widgetModel.get());
-        m_engine->rootContext()->setContextProperty("clockAdapter", &Widgets::ClockAdapter::GetInstance());
-        m_engine->rootContext()->setContextProperty("cpuAdapter", &Widgets::CpuAdapter::GetInstance());
 
         QObject::connect(m_engine.get(), &QQmlApplicationEngine::objectCreated,
                          m_app.get(), [](QObject *obj, const QUrl &objUrl) {
@@ -56,11 +52,6 @@ namespace UI {
 
         const QUrl url(QStringLiteral("qrc:/src/ui/qml/main.qml"));
         m_engine->load(url);
-
-        QObject::connect(&m_updateTimer, &QTimer::timeout, [this]() {
-            m_widgetModel->updateAll();
-        });
-        m_updateTimer.start(1000);
     }
 
     void QtWindowAdapter::Run() {
