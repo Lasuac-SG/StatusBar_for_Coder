@@ -322,6 +322,62 @@ private slots:
         QVERIFY(!timer->isActive());
     }
 
+    void cpuServiceReentrantStartDuringPrimeDoesNotResample()
+    {
+        auto source = sourceWith(
+            {{Platform::CpuTimes{0, 0, 0}}},
+            {{1.0}});
+        auto* const counts = source.get();
+        Platform::CpuService service(std::move(source));
+        auto* const timer = service.findChild<QTimer*>();
+        QVERIFY(timer != nullptr);
+        int callbacks{};
+        connect(
+            &service,
+            &Platform::CpuService::currentFrequencyMHzChanged,
+            &service,
+            [&service, &callbacks] {
+                ++callbacks;
+                service.start();
+            },
+            Qt::DirectConnection);
+
+        service.start();
+
+        QCOMPARE(callbacks, 1);
+        QCOMPARE(counts->timesCalls, 1);
+        QCOMPARE(counts->ratioCalls, 1);
+        QVERIFY(timer->isActive());
+    }
+
+    void cpuServiceStopDuringPrimeRemainsStopped()
+    {
+        auto source = sourceWith(
+            {{Platform::CpuTimes{0, 0, 0}}},
+            {{1.0}});
+        auto* const counts = source.get();
+        Platform::CpuService service(std::move(source));
+        auto* const timer = service.findChild<QTimer*>();
+        QVERIFY(timer != nullptr);
+        int callbacks{};
+        connect(
+            &service,
+            &Platform::CpuService::currentFrequencyMHzChanged,
+            &service,
+            [&service, &callbacks] {
+                ++callbacks;
+                service.stop();
+            },
+            Qt::DirectConnection);
+
+        service.start();
+
+        QCOMPARE(callbacks, 1);
+        QCOMPARE(counts->timesCalls, 1);
+        QCOMPARE(counts->ratioCalls, 1);
+        QVERIFY(!timer->isActive());
+    }
+
     void cpuServiceWithNullSourceNeverStarts()
     {
         Platform::CpuService service(std::unique_ptr<Platform::CpuDataSource>{});
@@ -480,6 +536,59 @@ private slots:
         QVERIFY(timer->isSingleShot());
         QCOMPARE(timer->timerType(), Qt::PreciseTimer);
         QCOMPARE(timer->interval(), 125);
+    }
+
+    void clockBackwardJumpRefreshesAndSchedulesFromNewNow()
+    {
+        QDateTime now(
+            QDate(2026, 9, 4), QTime(12, 34, 56, 789), QTimeZone("UTC"));
+        Widgets::ClockViewModel clock(
+            Core::WidgetConfig{
+                "clock", "Clock", 0,
+                QJsonObject{
+                    {"format", "yyyy-MM-dd HH:mm:ss.zzz"}, {"timeZone", "UTC"}}},
+            [&now] { return now; });
+        auto* const timer = clock.findChild<QTimer*>();
+        QVERIFY(timer != nullptr);
+        QSignalSpy changed(&clock, &Widgets::ClockViewModel::timeTextChanged);
+
+        now = QDateTime(
+            QDate(2026, 9, 3), QTime(8, 10, 30, 250), QTimeZone("UTC"));
+        QVERIFY(fireSingleShotTimer(timer));
+
+        QCOMPARE(clock.timeText(), QString("2026-09-03 08:10:30.250"));
+        QCOMPARE(changed.count(), 1);
+        QCOMPARE(clock.findChildren<QTimer*>().size(), 1);
+        QVERIFY(timer->isActive());
+        QCOMPARE(timer->timerType(), Qt::CoarseTimer);
+        QCOMPARE(timer->interval(), 29750);
+        QVERIFY(timer->interval() <= 60000);
+    }
+
+    void clockForwardJumpRefreshesAndSchedulesFromNewNow()
+    {
+        QDateTime now(
+            QDate(2026, 9, 4), QTime(12, 34, 56, 789), QTimeZone("UTC"));
+        Widgets::ClockViewModel clock(
+            Core::WidgetConfig{
+                "clock", "Clock", 0,
+                QJsonObject{
+                    {"format", "yyyy-MM-dd HH:mm:ss.zzz"}, {"timeZone", "UTC"}}},
+            [&now] { return now; });
+        auto* const timer = clock.findChild<QTimer*>();
+        QVERIFY(timer != nullptr);
+        QSignalSpy changed(&clock, &Widgets::ClockViewModel::timeTextChanged);
+
+        now = QDateTime(
+            QDate(2026, 9, 6), QTime(8, 10, 30, 250), QTimeZone("UTC"));
+        QVERIFY(fireSingleShotTimer(timer));
+
+        QCOMPARE(clock.timeText(), QString("2026-09-06 08:10:30.250"));
+        QCOMPARE(changed.count(), 1);
+        QCOMPARE(clock.findChildren<QTimer*>().size(), 1);
+        QVERIFY(timer->isActive());
+        QCOMPARE(timer->timerType(), Qt::CoarseTimer);
+        QCOMPARE(timer->interval(), 29750);
     }
 };
 

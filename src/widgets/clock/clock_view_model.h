@@ -40,7 +40,10 @@ signals:
     void timeTextChanged();
 
 private:
-    static constexpr qint64 preciseWindowMs = 3000;
+    static constexpr qint64 minuteIntervalMs = 60000;
+    static constexpr qint64 coarseTimerEarlyPercent = 5;
+    static constexpr qint64 maximumLegitimateEarlyMs =
+        minuteIntervalMs * coarseTimerEarlyPercent / 100;
 
     void onTimerTimeout();
     void updateTimeText(const QDateTime& now);

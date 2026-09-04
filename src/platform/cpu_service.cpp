@@ -201,8 +201,8 @@ void CpuService::start()
     }
 
     m_previousTimes.reset();
-    sampleNow();
     m_timer.start();
+    sampleNow();
 }
 
 void CpuService::stop()

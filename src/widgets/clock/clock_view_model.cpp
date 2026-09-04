@@ -61,7 +61,7 @@ void ClockViewModel::Update()
     const QDateTime now = m_nowProvider();
     if (!now.isValid()) {
         m_nextMinuteTarget = {};
-        armTimer(60000, Qt::CoarseTimer);
+        armTimer(minuteIntervalMs, Qt::CoarseTimer);
         return;
     }
 
@@ -78,7 +78,7 @@ void ClockViewModel::onTimerTimeout()
     }
 
     const qint64 remaining = now.msecsTo(m_nextMinuteTarget);
-    if (remaining > 0) {
+    if (remaining > 0 && remaining <= maximumLegitimateEarlyMs) {
         armTimer(remaining, Qt::PreciseTimer);
         return;
     }
@@ -100,11 +100,12 @@ void ClockViewModel::scheduleNextMinute(const QDateTime& now)
 {
     const QTime time = now.time();
     const int elapsedInMinute = time.second() * 1000 + time.msec();
-    const qint64 remaining = std::max(1, 60000 - elapsedInMinute);
+    const qint64 remaining =
+        std::max(qint64{1}, minuteIntervalMs - elapsedInMinute);
     m_nextMinuteTarget = now.addMSecs(remaining);
     armTimer(
         remaining,
-        remaining <= preciseWindowMs ? Qt::PreciseTimer : Qt::CoarseTimer);
+        remaining <= maximumLegitimateEarlyMs ? Qt::PreciseTimer : Qt::CoarseTimer);
 }
 
 void ClockViewModel::armTimer(const qint64 intervalMs, const Qt::TimerType timerType)
