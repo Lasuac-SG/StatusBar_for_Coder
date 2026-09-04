@@ -25,12 +25,23 @@ public:
 
     [[nodiscard]] T& value() & { return std::get<0>(valueOrError_); }
     [[nodiscard]] const T& value() const& { return std::get<0>(valueOrError_); }
-    [[nodiscard]] T&& value() && { return std::get<0>(std::move(valueOrError_)); }
+    [[nodiscard]] T value() && { return std::get<0>(std::move(valueOrError_)); }
+    [[nodiscard]] T value() const&& { return std::get<0>(valueOrError_); }
 
-    [[nodiscard]] const QString& error() const noexcept
+    [[nodiscard]] const QString& error() const& noexcept
     {
         static const QString noError;
         return hasValue() ? noError : std::get<1>(valueOrError_);
+    }
+
+    [[nodiscard]] QString error() && noexcept
+    {
+        return hasValue() ? QString{} : std::get<1>(std::move(valueOrError_));
+    }
+
+    [[nodiscard]] QString error() const&& noexcept
+    {
+        return hasValue() ? QString{} : std::get<1>(valueOrError_);
     }
 
 private:
@@ -66,7 +77,9 @@ public:
         }
     }
 
-    [[nodiscard]] const QString& error() const noexcept { return error_; }
+    [[nodiscard]] const QString& error() const& noexcept { return error_; }
+    [[nodiscard]] QString error() && noexcept { return std::move(error_); }
+    [[nodiscard]] QString error() const&& noexcept { return error_; }
 
 private:
     Result(bool success, QString error)

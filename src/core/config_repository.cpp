@@ -6,10 +6,12 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QLockFile>
 #include <QSaveFile>
 #include <QSet>
 #include <QUuid>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <utility>
@@ -96,19 +98,19 @@ Result<void> validate(const ConfigDocument& document)
         const auto& widget = document.widgets.at(index);
         if (widget.id.isEmpty()) {
             return Result<void>::failure(
-                QStringLiteral("Widget %1 has an empty id").arg(index));
+                QStringLiteral("Widget %1 field 'id' must be nonempty").arg(index));
         }
         if (ids.contains(widget.id)) {
             return Result<void>::failure(
-                QStringLiteral("Duplicate widget id: %1").arg(widget.id));
+                QStringLiteral("Widget %1 field 'id' duplicates '%2'").arg(index).arg(widget.id));
         }
         if (widget.type.isEmpty()) {
             return Result<void>::failure(
-                QStringLiteral("Widget %1 has an empty type").arg(index));
+                QStringLiteral("Widget %1 field 'type' must be nonempty").arg(index));
         }
         if (widget.slot < 0) {
             return Result<void>::failure(
-                QStringLiteral("Widget %1 has an invalid slot").arg(index));
+                QStringLiteral("Widget %1 field 'slot' must be a nonnegative integer").arg(index));
         }
         ids.insert(widget.id);
     }
@@ -158,10 +160,29 @@ Result<ConfigDocument> parseVersionOne(const QByteArray& bytes)
         const QJsonValue slotValue = entry.value(QStringLiteral("slot"));
         const QJsonValue settingsValue = entry.value(QStringLiteral("settings"));
         int slot = 0;
-        if (!idValue.isString() || !typeValue.isString()
-            || !readNonNegativeInteger(slotValue, slot) || !settingsValue.isObject()) {
+        if (!idValue.isString()) {
             return Result<ConfigDocument>::failure(
-                QStringLiteral("Widget %1 has invalid fields").arg(index));
+                QStringLiteral("Widget %1 field 'id' must be a string").arg(index));
+        }
+        if (idValue.toString().isEmpty()) {
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Widget %1 field 'id' must be nonempty").arg(index));
+        }
+        if (!typeValue.isString()) {
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Widget %1 field 'type' must be a string").arg(index));
+        }
+        if (typeValue.toString().isEmpty()) {
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Widget %1 field 'type' must be nonempty").arg(index));
+        }
+        if (!readNonNegativeInteger(slotValue, slot)) {
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Widget %1 field 'slot' must be a nonnegative integer").arg(index));
+        }
+        if (!settingsValue.isObject()) {
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Widget %1 field 'settings' must be an object").arg(index));
         }
 
         document.widgets.append(
@@ -208,10 +229,18 @@ Result<ConfigDocument> parseLegacy(const QByteArray& bytes)
         const QJsonObject entry = entryValue.toObject();
         const QJsonValue nameValue = entry.value(QStringLiteral("name"));
         int slot = 0;
-        if (!nameValue.isString() || nameValue.toString().isEmpty()
-            || !readNonNegativeInteger(entry.value(QStringLiteral("slot")), slot)) {
+        if (!nameValue.isString()) {
             return Result<ConfigDocument>::failure(
-                QStringLiteral("Legacy widget %1 has invalid fields").arg(index));
+                QStringLiteral("Legacy widget %1 field 'name' must be a string").arg(index));
+        }
+        if (nameValue.toString().isEmpty()) {
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Legacy widget %1 field 'name' must be nonempty").arg(index));
+        }
+        if (!readNonNegativeInteger(entry.value(QStringLiteral("slot")), slot)) {
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Legacy widget %1 field 'slot' must be a nonnegative integer")
+                    .arg(index));
         }
 
         document.widgets.append(WidgetConfig{
@@ -248,44 +277,83 @@ QByteArray serialize(const ConfigDocument& document)
         .toJson(QJsonDocument::Indented);
 }
 
-QString normalizedAbsolutePath(const QString& path)
+QString cleanAbsolutePath(const QString& path)
 {
-    const QFileInfo info(path);
-    const QString canonical = info.canonicalFilePath();
-    return QDir::cleanPath(canonical.isEmpty() ? info.absoluteFilePath() : canonical);
+    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
 }
 
 bool pathsMatch(const QString& left, const QString& right)
 {
 #ifdef Q_OS_WIN
-    return normalizedAbsolutePath(left).compare(normalizedAbsolutePath(right), Qt::CaseInsensitive)
-        == 0;
+    return left.compare(right, Qt::CaseInsensitive) == 0;
 #else
-    return normalizedAbsolutePath(left) == normalizedAbsolutePath(right);
+    return left == right;
 #endif
 }
 
 } // namespace
 
 ConfigRepository::ConfigRepository(QString configPath, QStringList legacyCandidates)
-    : configPath_(std::move(configPath))
-    , legacyCandidates_(std::move(legacyCandidates))
+    : configPath_(cleanAbsolutePath(configPath))
 {
+    for (const QString& candidate : legacyCandidates) {
+        if (candidate.isEmpty()) {
+            continue;
+        }
+
+        const QString frozenCandidate = cleanAbsolutePath(candidate);
+        if (pathsMatch(frozenCandidate, configPath_)) {
+            continue;
+        }
+
+        const bool duplicate = std::any_of(
+            legacyCandidates_.cbegin(),
+            legacyCandidates_.cend(),
+            [&frozenCandidate](const QString& existing) {
+                return pathsMatch(existing, frozenCandidate);
+            });
+        if (!duplicate) {
+            legacyCandidates_.append(frozenCandidate);
+        }
+    }
 }
 
 Result<ConfigDocument> ConfigRepository::load() const
 {
-    if (QFileInfo::exists(configPath_)) {
+    const auto loadDestination = [this]() -> Result<ConfigDocument> {
         const auto bytes = readAll(configPath_);
         if (!bytes.hasValue()) {
             return Result<ConfigDocument>::failure(bytes.error());
         }
         return parseVersionOne(bytes.value());
+    };
+
+    if (QFileInfo::exists(configPath_)) {
+        return loadDestination();
+    }
+
+    const auto directoryResult = ensureParentDirectory(configPath_);
+    if (!directoryResult.hasValue()) {
+        return Result<ConfigDocument>::failure(directoryResult.error());
+    }
+
+    const QString migrationLockPath = configPath_ + QStringLiteral(".migration.lock");
+    QLockFile migrationLock(migrationLockPath);
+    migrationLock.setStaleLockTime(30'000);
+    constexpr int migrationLockTimeoutMs = 500;
+    if (!migrationLock.tryLock(migrationLockTimeoutMs)) {
+        return Result<ConfigDocument>::failure(
+            QStringLiteral("Cannot acquire configuration migration lock: %1")
+                .arg(migrationLockPath));
+    }
+
+    if (QFileInfo::exists(configPath_)) {
+        return loadDestination();
     }
 
     QString legacyPath;
     for (const QString& candidate : legacyCandidates_) {
-        if (!pathsMatch(candidate, configPath_) && QFileInfo(candidate).isFile()) {
+        if (QFileInfo(candidate).isFile()) {
             legacyPath = candidate;
             break;
         }
@@ -306,16 +374,28 @@ Result<ConfigDocument> ConfigRepository::load() const
         return Result<ConfigDocument>::failure(
             QStringLiteral("Configuration destination conflicts with legacy backup path"));
     }
-    if (!pathsMatch(legacyPath, backupPath)) {
-        const auto backupResult = atomicallyWrite(backupPath, legacyBytes.value());
-        if (!backupResult.hasValue()) {
-            return Result<ConfigDocument>::failure(backupResult.error());
+    if (QFileInfo::exists(backupPath)) {
+        const auto backupBytes = readAll(backupPath);
+        if (!backupBytes.hasValue()) {
+            return Result<ConfigDocument>::failure(backupBytes.error());
+        }
+        if (backupBytes.value() != legacyBytes.value()) {
+            return Result<ConfigDocument>::failure(
+                QStringLiteral("Legacy backup conflict at %1; existing bytes differ from %2")
+                    .arg(backupPath, legacyPath));
         }
     }
 
     auto migrated = parseLegacy(legacyBytes.value());
     if (!migrated.hasValue()) {
         return migrated;
+    }
+
+    if (!QFileInfo::exists(backupPath)) {
+        const auto backupResult = atomicallyWrite(backupPath, legacyBytes.value());
+        if (!backupResult.hasValue()) {
+            return Result<ConfigDocument>::failure(backupResult.error());
+        }
     }
 
     const auto saveResult = save(migrated.value());

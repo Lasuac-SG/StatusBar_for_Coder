@@ -2,10 +2,14 @@
 #include "core/window_manager.h"
 #include "widgets/clock/clock_adapter.h"
 #include "widgets/cpu/cpu_adapter.h"
+#include <QCoreApplication>
+#include <QDir>
 #include <QQmlContext>
+#include <QStandardPaths>
 #include <QtQml>
 #include <QFont>
 #include <iostream>
+#include <stdexcept>
 
 namespace UI {
     QtWindowAdapter::QtWindowAdapter(int& argc, char** argv) {
@@ -20,10 +24,25 @@ namespace UI {
 
         m_engine = std::make_unique<QQmlApplicationEngine>();
 
-        m_widgetModel.loadFromConfig();
+        const QString configPath =
+            QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+                .filePath(QStringLiteral("config.json"));
+        const QStringList legacyCandidates{
+            QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("config.json")),
+            QDir::current().filePath(QStringLiteral("config.json")),
+        };
+        m_widgetModel = std::make_unique<WidgetModel>(
+            Core::ConfigRepository(configPath, legacyCandidates));
+        const auto configResult = m_widgetModel->loadFromConfig();
+        if (!configResult.hasValue()) {
+            throw std::runtime_error(
+                QStringLiteral("Failed to load configuration from %1: %2")
+                    .arg(configPath, configResult.error())
+                    .toStdString());
+        }
 
         m_engine->rootContext()->setContextProperty("reservedBarHeight", static_cast<int>(Core::WindowManager::LOGICAL_BAR_HEIGHT));
-        m_engine->rootContext()->setContextProperty("widgetModel", &m_widgetModel);
+        m_engine->rootContext()->setContextProperty("widgetModel", m_widgetModel.get());
         m_engine->rootContext()->setContextProperty("clockAdapter", &Widgets::ClockAdapter::GetInstance());
         m_engine->rootContext()->setContextProperty("cpuAdapter", &Widgets::CpuAdapter::GetInstance());
 
@@ -39,7 +58,7 @@ namespace UI {
         m_engine->load(url);
 
         QObject::connect(&m_updateTimer, &QTimer::timeout, [this]() {
-            m_widgetModel.updateAll();
+            m_widgetModel->updateAll();
         });
         m_updateTimer.start(1000);
     }

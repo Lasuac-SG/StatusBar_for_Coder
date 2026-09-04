@@ -32,7 +32,6 @@ target_link_libraries(statusbar_core
     PRIVATE Shell32 User32 Pdh Advapi32
 )
 target_include_directories(statusbar_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_include_directories(statusbar_core SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 qt_add_executable(StatusBar_for_Coder WIN32)
 target_sources(StatusBar_for_Coder PRIVATE

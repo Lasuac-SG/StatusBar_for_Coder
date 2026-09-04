@@ -18,7 +18,7 @@ namespace UI {
     private:
         std::unique_ptr<QGuiApplication> m_app;
         std::unique_ptr<QQmlApplicationEngine> m_engine;
-        WidgetModel m_widgetModel;
+        std::unique_ptr<WidgetModel> m_widgetModel;
         QTimer m_updateTimer;
     };
 }

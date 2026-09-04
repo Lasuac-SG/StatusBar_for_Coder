@@ -1,10 +1,13 @@
 #pragma once
+#include "core/config_repository.h"
+#include "core/widget_config.h"
+#include "widgets/i_widget_view_model.h"
+
 #include <QAbstractListModel>
 #include <QJsonObject>
 #include <QString>
-#include <vector>
 #include <memory>
-#include "widgets/i_widget_view_model.h"
+#include <vector>
 
 namespace UI {
     struct WidgetInstance {
@@ -16,6 +19,7 @@ namespace UI {
 
     class WidgetModel : public QAbstractListModel {
         Q_OBJECT
+        Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
     public:
         enum WidgetRoles {
             KindRole = Qt::UserRole + 1,
@@ -23,20 +27,29 @@ namespace UI {
             SpanRole
         };
 
-        explicit WidgetModel(QObject* parent = nullptr);
+        explicit WidgetModel(Core::ConfigRepository repository, QObject* parent = nullptr);
         
         int rowCount(const QModelIndex& parent = QModelIndex()) const override;
         QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
         QHash<int, QByteArray> roleNames() const override;
 
-        void loadFromConfig();
+        [[nodiscard]] Core::Result<void> loadFromConfig();
+        [[nodiscard]] const QString& lastError() const noexcept;
         void updateAll();
 
         // 动态接收 QML 实时比例算出的尺寸，实现无损吸附碰撞
-        Q_INVOKABLE void handleWidgetDropped(int draggedIndex, float dropCenterX, float cellWidth, float spacing, float containerWidth);
+        Q_INVOKABLE bool handleWidgetDropped(int draggedIndex, float dropCenterX, float cellWidth, float spacing, float containerWidth);
+
+    signals:
+        void lastErrorChanged();
 
     private:
-        void refreshLayoutAndSync();
+        [[nodiscard]] Core::Result<Core::ConfigDocument> documentWithCurrentSlots() const;
+        void setLastError(QString error);
+
+        Core::ConfigRepository m_repository;
+        Core::ConfigDocument m_document;
         std::vector<WidgetInstance> m_instances;
+        QString m_lastError;
     };
 }

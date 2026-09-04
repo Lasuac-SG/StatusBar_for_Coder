@@ -1,12 +1,15 @@
 #include "ui/widget_model.h"
-#include "core/config_repository.h"
 #include "widgets/widget_registry.h"
-#include <QUuid>
 #include <cmath>
 #include <algorithm>
+#include <utility>
 
 namespace UI {
-    WidgetModel::WidgetModel(QObject* parent) : QAbstractListModel(parent) {}
+    WidgetModel::WidgetModel(Core::ConfigRepository repository, QObject* parent)
+        : QAbstractListModel(parent)
+        , m_repository(std::move(repository))
+    {
+    }
 
     int WidgetModel::rowCount(const QModelIndex& parent) const {
         if (parent.isValid()) return 0;
@@ -32,25 +35,34 @@ namespace UI {
         };
     }
 
-    void WidgetModel::loadFromConfig() {
-        beginResetModel();
-        m_instances.clear();
-        
-        const Core::ConfigRepository repository(QStringLiteral("config.json"));
-        const auto config = repository.load();
+    Core::Result<void> WidgetModel::loadFromConfig() {
+        auto config = m_repository.load();
         if (!config.hasValue()) {
-            endResetModel();
-            return;
+            setLastError(config.error());
+            return Core::Result<void>::failure(config.error());
         }
+
+        Core::ConfigDocument loadedDocument = std::move(config).value();
+        std::vector<WidgetInstance> loadedInstances;
         const auto& registry = Widgets::WidgetRegistry::GetInstance();
 
-        for (const auto& wConfig : config.value().widgets) {
+        for (const auto& wConfig : loadedDocument.widgets) {
             if (auto widget = registry.Create(wConfig.type.toStdString())) {
-                m_instances.push_back(
+                loadedInstances.push_back(
                     WidgetInstance{std::move(widget), wConfig.slot, wConfig.id, wConfig.settings});
             }
         }
+
+        beginResetModel();
+        m_document = std::move(loadedDocument);
+        m_instances = std::move(loadedInstances);
         endResetModel();
+        setLastError({});
+        return Core::Result<void>::success();
+    }
+
+    const QString& WidgetModel::lastError() const noexcept {
+        return m_lastError;
     }
 
     void WidgetModel::updateAll() {
@@ -59,8 +71,12 @@ namespace UI {
         }
     }
 
-    void WidgetModel::handleWidgetDropped(int draggedIndex, float dropCenterX, float cellWidth, float spacing, float containerWidth) {
-        if (draggedIndex < 0 || draggedIndex >= static_cast<int>(m_instances.size())) return;
+    bool WidgetModel::handleWidgetDropped(int draggedIndex, float dropCenterX, float cellWidth, float spacing, float containerWidth) {
+        if (draggedIndex < 0 || draggedIndex >= static_cast<int>(m_instances.size())) {
+            setLastError(QStringLiteral("Cannot move widget: index %1 is out of range")
+                             .arg(draggedIndex));
+            return false;
+        }
 
         float unitWidth = cellWidth + spacing;
         int span = m_instances[draggedIndex].vm->GetSpan();
@@ -82,6 +98,16 @@ namespace UI {
         }
 
         int oldSlot = m_instances[draggedIndex].slot;
+        if (oldSlot == targetSlot) {
+            setLastError({});
+            return true;
+        }
+
+        std::vector<int> previousSlots;
+        previousSlots.reserve(m_instances.size());
+        for (const auto& instance : m_instances) {
+            previousSlots.push_back(instance.slot);
+        }
 
         for (size_t i = 0; i < m_instances.size(); ++i) {
             if (i == static_cast<size_t>(draggedIndex)) continue;
@@ -91,35 +117,64 @@ namespace UI {
 
             if (std::max(targetSlot, otherStart) <= std::min(targetEnd, otherEnd)) {
                 m_instances[i].slot = oldSlot;
-                QModelIndex idx = index(static_cast<int>(i));
-                emit dataChanged(idx, idx, {SlotRole});
             }
         }
 
         m_instances[draggedIndex].slot = targetSlot;
-        
-        QModelIndex idx = index(draggedIndex);
-        emit dataChanged(idx, idx, {SlotRole});
 
-        if (oldSlot != targetSlot) {
-            refreshLayoutAndSync();
+        auto updatedDocument = documentWithCurrentSlots();
+        if (!updatedDocument.hasValue()) {
+            for (size_t i = 0; i < m_instances.size(); ++i) {
+                m_instances[i].slot = previousSlots[i];
+            }
+            setLastError(updatedDocument.error());
+            return false;
         }
+
+        const auto saveResult = m_repository.save(updatedDocument.value());
+        if (!saveResult.hasValue()) {
+            for (size_t i = 0; i < m_instances.size(); ++i) {
+                m_instances[i].slot = previousSlots[i];
+            }
+            setLastError(QStringLiteral("Cannot save widget layout: %1").arg(saveResult.error()));
+            return false;
+        }
+
+        m_document = std::move(updatedDocument).value();
+        for (size_t i = 0; i < m_instances.size(); ++i) {
+            if (m_instances[i].slot != previousSlots[i]) {
+                const QModelIndex changed = index(static_cast<int>(i));
+                emit dataChanged(changed, changed, {SlotRole});
+            }
+        }
+        setLastError({});
+        return true;
     }
 
-    void WidgetModel::refreshLayoutAndSync() {
-        Core::ConfigDocument document;
-        document.widgets.reserve(static_cast<qsizetype>(m_instances.size()));
+    Core::Result<Core::ConfigDocument> WidgetModel::documentWithCurrentSlots() const {
+        Core::ConfigDocument document = m_document;
         for (const auto& instance : m_instances) {
-            document.widgets.append({
-                instance.id.isEmpty()
-                    ? QUuid::createUuid().toString(QUuid::WithoutBraces)
-                    : instance.id,
-                QString::fromStdString(instance.vm->GetKind()),
-                instance.slot,
-                instance.settings,
-            });
+            const auto match = std::find_if(
+                document.widgets.begin(),
+                document.widgets.end(),
+                [&instance](const Core::WidgetConfig& config) {
+                    return config.id == instance.id;
+                });
+            if (match == document.widgets.end()) {
+                return Core::Result<Core::ConfigDocument>::failure(
+                    QStringLiteral("Cannot save widget layout: config id '%1' is missing")
+                        .arg(instance.id));
+            }
+            match->slot = instance.slot;
         }
-        const Core::ConfigRepository repository(QStringLiteral("config.json"));
-        (void)repository.save(document);
+        return Core::Result<Core::ConfigDocument>::success(std::move(document));
+    }
+
+    void WidgetModel::setLastError(QString error) {
+        if (m_lastError == error) {
+            return;
+        }
+        m_lastError = std::move(error);
+        emit lastErrorChanged();
     }
 }
