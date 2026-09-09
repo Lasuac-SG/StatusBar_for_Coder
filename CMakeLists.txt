@@ -40,6 +40,7 @@ target_sources(StatusBar_for_Coder PRIVATE
     src/ui/qt_window_adapter.cpp
     resources.qrc
 )
+set_target_properties(StatusBar_for_Coder PROPERTIES AUTORCC ON)
 target_link_libraries(StatusBar_for_Coder PRIVATE
     statusbar_core Qt6::Gui Qt6::Qml Qt6::Quick)
 

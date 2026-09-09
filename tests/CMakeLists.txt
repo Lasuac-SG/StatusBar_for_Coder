@@ -29,3 +29,11 @@ add_test(NAME widget_registry_test COMMAND widget_registry_test)
 qt_add_executable(widget_model_test widget_model_test.cpp)
 target_link_libraries(widget_model_test PRIVATE statusbar_core Qt6::Test)
 add_test(NAME widget_model_test COMMAND widget_model_test)
+
+qt_add_executable(resource_embedding_test
+    resource_embedding_test.cpp
+    ${PROJECT_SOURCE_DIR}/resources.qrc
+)
+set_target_properties(resource_embedding_test PROPERTIES AUTORCC ON)
+target_link_libraries(resource_embedding_test PRIVATE statusbar_core Qt6::Test)
+add_test(NAME resource_embedding_test COMMAND resource_embedding_test)
