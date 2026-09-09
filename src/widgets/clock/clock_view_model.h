@@ -1,7 +1,7 @@
 #pragma once
 
 #include "core/widget_config.h"
-#include "widgets/i_widget_view_model.h"
+#include "widgets/widget_view_model.h"
 
 #include <QDateTime>
 #include <QJsonObject>
@@ -10,13 +10,12 @@
 #include <QTimeZone>
 
 #include <functional>
-#include <string>
 
 namespace Widgets {
 
 using ClockNowProvider = std::function<QDateTime()>;
 
-class ClockViewModel final : public IWidgetViewModel {
+class ClockViewModel final : public WidgetViewModel {
     Q_OBJECT
     Q_PROPERTY(QString instanceId READ instanceId CONSTANT)
     Q_PROPERTY(QJsonObject settings READ settings CONSTANT)
@@ -28,13 +27,11 @@ public:
         ClockNowProvider nowProvider = {},
         QObject* parent = nullptr);
 
-    [[nodiscard]] const QString& instanceId() const noexcept { return m_config.id; }
+    [[nodiscard]] const QString& instanceId() const noexcept override { return m_config.id; }
     [[nodiscard]] const QJsonObject& settings() const noexcept { return m_config.settings; }
     [[nodiscard]] const QString& timeText() const noexcept { return m_timeText; }
 
-    [[nodiscard]] int GetSpan() const override { return 3; }
-    [[nodiscard]] std::string GetKind() const override { return "Clock"; }
-    void Update() override;
+    void Update();
 
 signals:
     void timeTextChanged();

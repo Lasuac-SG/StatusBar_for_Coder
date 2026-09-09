@@ -1,5 +1,10 @@
 #pragma once
 
+#include "core/result.h"
+#include "widgets/widget_registry.h"
+
 namespace Widgets {
-    void RegisterAllWidgets();
-}
+
+[[nodiscard]] Core::Result<WidgetRegistry> registerAllWidgets();
+
+} // namespace Widgets

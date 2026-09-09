@@ -8,4 +8,9 @@
         <file>src/widgets/cpu/CpuDetailPopup.qml</file>
         <file>src/widgets/cpu/cpu.svg</file>
     </qresource>
+    <qresource prefix="/qt/qml/StatusBar">
+        <file alias="ClockWidget.qml">src/widgets/clock/ClockWidget.qml</file>
+        <file alias="CpuWidget.qml">src/widgets/cpu/CpuWidget.qml</file>
+        <file alias="CpuDetailPopup.qml">src/widgets/cpu/CpuDetailPopup.qml</file>
+    </qresource>
 </RCC>

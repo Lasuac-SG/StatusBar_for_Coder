@@ -21,3 +21,11 @@ add_test(NAME cpu_usage_test COMMAND cpu_usage_test)
 qt_add_executable(widget_instances_test widget_instances_test.cpp)
 target_link_libraries(widget_instances_test PRIVATE statusbar_core Qt6::Test)
 add_test(NAME widget_instances_test COMMAND widget_instances_test)
+
+qt_add_executable(widget_registry_test widget_registry_test.cpp)
+target_link_libraries(widget_registry_test PRIVATE statusbar_core Qt6::Test)
+add_test(NAME widget_registry_test COMMAND widget_registry_test)
+
+qt_add_executable(widget_model_test widget_model_test.cpp)
+target_link_libraries(widget_model_test PRIVATE statusbar_core Qt6::Test)
+add_test(NAME widget_model_test COMMAND widget_model_test)

@@ -58,6 +58,9 @@ Window {
             property real availableWidth: Math.max(0, container.width - (root.spacing * 2))
             property int rawSlots: Math.floor((availableWidth + root.spacing) / root.unitWidth)
             property int totalSlots: (rawSlots % 2 === 1) ? rawSlots : Math.max(1, rawSlots - 1)
+
+            onTotalSlotsChanged: widgetModel.setTotalSlots(totalSlots)
+            Component.onCompleted: widgetModel.setTotalSlots(totalSlots)
             
             width: (totalSlots * root.cellWidth) + (Math.max(0, totalSlots - 1) * root.spacing)
             anchors.horizontalCenter: parent.horizontalCenter
@@ -83,11 +86,7 @@ Window {
 
                     Loader {
                         anchors.fill: parent
-                        source: {
-                            if (model.kind === "Clock") return "qrc:/src/widgets/clock/ClockWidget.qml"
-                            if (model.kind === "Cpu") return "qrc:/src/widgets/cpu/CpuWidget.qml"
-                            return ""
-                        }
+                        source: model.qmlUrl
                         onLoaded: {
                             if (item) item.viewModel = model.viewModel
                         }
@@ -107,7 +106,11 @@ Window {
                         onReleased: {
                             widgetContainer.color = "transparent"
                             let dropCenterX = widgetContainer.x + (widgetContainer.width / 2)
-                            widgetModel.handleWidgetDropped(model.index, dropCenterX, root.cellWidth, root.spacing, gridArea.width)
+                            let widgetWidth = (model.span * root.cellWidth)
+                                + (Math.max(0, model.span - 1) * root.spacing)
+                            let dropLeftX = dropCenterX - (widgetWidth / 2)
+                            let targetSlot = Math.round(dropLeftX / root.unitWidth)
+                            widgetModel.dropWidget(model.instanceId, targetSlot)
                             
                             widgetContainer.x = Qt.binding(function() {
                                 return model.slot * root.unitWidth

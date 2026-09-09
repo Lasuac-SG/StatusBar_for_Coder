@@ -1,5 +1,6 @@
 #include "ui/qt_window_adapter.h"
 #include "core/window_manager.h"
+#include "widgets/registry_setup.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QQmlContext>
@@ -29,8 +30,20 @@ namespace UI {
             QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("config.json")),
             QDir::current().filePath(QStringLiteral("config.json")),
         };
+        auto registry = Widgets::registerAllWidgets();
+        if (!registry.hasValue()) {
+            throw std::runtime_error(
+                QStringLiteral("Failed to register widgets: %1")
+                    .arg(registry.error())
+                    .toStdString());
+        }
+        m_cpuService = std::make_unique<Platform::CpuService>(
+            std::make_unique<Platform::WindowsCpuDataSource>());
+        Widgets::WidgetContext widgetContext{*m_cpuService};
         m_widgetModel = std::make_unique<WidgetModel>(
-            Core::ConfigRepository(configPath, legacyCandidates));
+            Core::ConfigRepository(configPath, legacyCandidates),
+            std::move(registry).value(),
+            widgetContext);
         const auto configResult = m_widgetModel->loadFromConfig();
         if (!configResult.hasValue()) {
             throw std::runtime_error(
@@ -38,6 +51,7 @@ namespace UI {
                     .arg(configPath, configResult.error())
                     .toStdString());
         }
+        m_cpuService->start();
 
         m_engine->rootContext()->setContextProperty("reservedBarHeight", static_cast<int>(Core::WindowManager::LOGICAL_BAR_HEIGHT));
         m_engine->rootContext()->setContextProperty("widgetModel", m_widgetModel.get());

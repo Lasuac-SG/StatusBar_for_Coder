@@ -40,7 +40,7 @@ ClockViewModel::ClockViewModel(
     Core::WidgetConfig config,
     ClockNowProvider nowProvider,
     QObject* parent)
-    : IWidgetViewModel(parent)
+    : WidgetViewModel(parent)
     , m_config(std::move(config))
     , m_nowProvider(std::move(nowProvider))
     , m_timer(this)

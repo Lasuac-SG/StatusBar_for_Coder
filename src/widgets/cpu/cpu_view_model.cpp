@@ -8,7 +8,7 @@ CpuViewModel::CpuViewModel(
     Core::WidgetConfig config,
     Platform::CpuService& service,
     QObject* parent)
-    : IWidgetViewModel(parent)
+    : WidgetViewModel(parent)
     , m_config(std::move(config))
     , m_service(&service)
     , m_history(service.history())

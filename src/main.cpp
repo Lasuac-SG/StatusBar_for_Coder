@@ -1,14 +1,11 @@
 #include "core/window_manager.h"
 #include "ui/qt_window_adapter.h"
-#include "widgets/registry_setup.h"
 #include "platform/display.h"
 #include <iostream>
 #include <memory>
 
 int main(int argc, char** argv) {
     try {
-        Widgets::RegisterAllWidgets();
-
         auto qtAdapter = std::make_unique<UI::QtWindowAdapter>(argc, argv);
         Core::WindowManager windowManager(std::move(qtAdapter));
 
