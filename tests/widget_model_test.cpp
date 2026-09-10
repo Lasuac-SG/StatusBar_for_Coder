@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QTimer>
 
 #include <memory>
 #include <utility>
@@ -24,6 +25,7 @@ class NullCpuDataSource final : public Platform::CpuDataSource {
 public:
     std::optional<Platform::CpuTimes> sampleTimes() noexcept override
     {
+        ++timesCalls;
         return std::nullopt;
     }
     std::optional<double> samplePerformanceRatio() noexcept override
@@ -34,6 +36,8 @@ public:
     {
         return std::nullopt;
     }
+
+    int timesCalls{};
 };
 
 class TrackingOperations final : public Core::Internal::ConfigRepositoryOperations {
@@ -109,6 +113,64 @@ class WidgetModelTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    void cpuServiceDemandTracksModelReloadsWithoutTypeDispatch()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Core::ConfigRepository repository(directory.filePath("config.json"));
+        QVERIFY(repository.save(Core::ConfigDocument{}).hasValue());
+        auto source = std::make_unique<NullCpuDataSource>();
+        auto* const counts = source.get();
+        Platform::CpuService cpuService(std::move(source));
+        auto* const timer = cpuService.findChild<QTimer*>();
+        QVERIFY(timer != nullptr);
+        Widgets::WidgetContext context{cpuService};
+        UI::WidgetModel model(repository, builtInRegistry(), context);
+
+        QVERIFY(model.loadFromConfig().hasValue());
+        QVERIFY(!timer->isActive());
+        QCOMPARE(counts->timesCalls, 0);
+
+        QVERIFY(repository.save(Core::ConfigDocument{
+                                    1,
+                                    {{"clock", "Clock", 0, {}}},
+                                })
+                    .hasValue());
+        QVERIFY(model.loadFromConfig().hasValue());
+        QVERIFY(!timer->isActive());
+        QCOMPARE(counts->timesCalls, 0);
+
+        QVERIFY(repository.save(Core::ConfigDocument{
+                                    1,
+                                    {
+                                        {"cpu-one", "Cpu", 0, {}},
+                                        {"cpu-two", "Cpu", 2, {}},
+                                    },
+                                })
+                    .hasValue());
+        QVERIFY(model.loadFromConfig().hasValue());
+        QVERIFY(timer->isActive());
+        QCOMPARE(counts->timesCalls, 1);
+
+        QVERIFY(repository.save(Core::ConfigDocument{
+                                    1,
+                                    {{"clock-again", "Clock", 0, {}}},
+                                })
+                    .hasValue());
+        QVERIFY(model.loadFromConfig().hasValue());
+        QVERIFY(!timer->isActive());
+        QCOMPARE(counts->timesCalls, 1);
+
+        QVERIFY(repository.save(Core::ConfigDocument{
+                                    1,
+                                    {{"cpu-again", "Cpu", 0, {}}},
+                                })
+                    .hasValue());
+        QVERIFY(model.loadFromConfig().hasValue());
+        QVERIFY(timer->isActive());
+        QCOMPARE(counts->timesCalls, 2);
+    }
+
     void exposesExactRolesAndDescriptorDerivedData()
     {
         QTemporaryDir directory;
@@ -195,12 +257,28 @@ private slots:
             "FutureWidget",
             8,
             QJsonObject{{"nested", QJsonObject{{"keep", true}}}},
+            QJsonObject{{"futurePayload", QJsonObject{{"opaque", true}}}},
         };
         const Core::WidgetConfig known{
-            "clock-id", "Clock", 0, QJsonObject{{"timeZone", "UTC"}}};
+            "clock-id",
+            "Clock",
+            0,
+            QJsonObject{{"timeZone", "UTC"}},
+            QJsonObject{{"knownExtra", QJsonArray{1, 2, 3}}},
+        };
         const Core::WidgetConfig secondUnknown{
-            "future-two", "AnotherFutureWidget", 12, QJsonObject{{"value", 42}}};
-        QVERIFY(repository.save(Core::ConfigDocument{1, {firstUnknown, known, secondUnknown}})
+            "future-two",
+            "AnotherFutureWidget",
+            12,
+            QJsonObject{{"value", 42}},
+            QJsonObject{{"secondExtra", QJsonObject{{"nested", "keep"}}}},
+        };
+        const QJsonObject rootExtensions{
+            {"metadata", QJsonObject{{"owner", "future"}, {"nested", QJsonArray{true, 7}}}},
+        };
+        QVERIFY(repository
+                    .save(Core::ConfigDocument{
+                        1, {firstUnknown, known, secondUnknown}, rootExtensions})
                     .hasValue());
         Platform::CpuService cpuService(std::make_unique<NullCpuDataSource>());
         Widgets::WidgetContext context{cpuService};
@@ -214,12 +292,12 @@ private slots:
         const auto reloaded = repository.load();
         QVERIFY2(reloaded.hasValue(), qPrintable(reloaded.error()));
         QCOMPARE(reloaded.value().version, 1);
+        QCOMPARE(reloaded.value().extensions, rootExtensions);
         QCOMPARE(reloaded.value().widgets.size(), 3);
         QVERIFY(reloaded.value().widgets.at(0) == firstUnknown);
-        QCOMPARE(reloaded.value().widgets.at(1).id, known.id);
-        QCOMPARE(reloaded.value().widgets.at(1).type, known.type);
-        QCOMPARE(reloaded.value().widgets.at(1).slot, 4);
-        QCOMPARE(reloaded.value().widgets.at(1).settings, known.settings);
+        Core::WidgetConfig movedKnown = known;
+        movedKnown.slot = 4;
+        QVERIFY(reloaded.value().widgets.at(1) == movedKnown);
         QVERIFY(reloaded.value().widgets.at(2) == secondUnknown);
     }
 
@@ -262,6 +340,85 @@ private slots:
         QCOMPARE(operations->writeAttempts, 1);
         QCOMPARE(model.data(model.index(0), UI::WidgetModel::SlotRole).toInt(), 4);
         QCOMPARE(model.data(model.index(1), UI::WidgetModel::SlotRole).toInt(), 1);
+    }
+
+    void insufficientShrinkInvalidatesGeometryAndBlocksDrops()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("config.json");
+        auto operations = std::make_shared<TrackingOperations>();
+        const auto repository = Core::Internal::makeConfigRepository(path, {}, operations);
+        QVERIFY(repository.save(Core::ConfigDocument{
+                                    1,
+                                    {
+                                        {"clock", "Clock", 0, {}},
+                                        {"cpu", "Cpu", 5, {}},
+                                    },
+                                })
+                    .hasValue());
+        operations->writeAttempts = 0;
+        Platform::CpuService cpuService(std::make_unique<NullCpuDataSource>());
+        Widgets::WidgetContext context{cpuService};
+        UI::WidgetModel model(repository, builtInRegistry(), context);
+        QVERIFY(model.loadFromConfig().hasValue());
+        QVERIFY(model.setTotalSlots(9));
+
+        QVERIFY(!model.setTotalSlots(4));
+        QCOMPARE(operations->writeAttempts, 0);
+        QVERIFY(!model.dropWidget(QStringLiteral("clock"), 5));
+        QCOMPARE(operations->writeAttempts, 0);
+        QVERIFY2(model.lastError().contains("4"), qPrintable(model.lastError()));
+        QCOMPARE(model.data(model.index(0), UI::WidgetModel::SlotRole).toInt(), 0);
+        QCOMPARE(model.data(model.index(1), UI::WidgetModel::SlotRole).toInt(), 5);
+    }
+
+    void persistenceFailedResizeBlocksDropsAndRetriesSameGeometry()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("config.json");
+        auto operations = std::make_shared<TrackingOperations>();
+        const auto repository = Core::Internal::makeConfigRepository(path, {}, operations);
+        QVERIFY(repository.save(Core::ConfigDocument{
+                                    1,
+                                    {
+                                        {"clock", "Clock", 6, {}},
+                                        {"cpu", "Cpu", 1, {}},
+                                    },
+                                })
+                    .hasValue());
+        operations->writeAttempts = 0;
+        Platform::CpuService cpuService(std::make_unique<NullCpuDataSource>());
+        Widgets::WidgetContext context{cpuService};
+        UI::WidgetModel model(repository, builtInRegistry(), context);
+        QVERIFY(model.loadFromConfig().hasValue());
+        QVERIFY(model.setTotalSlots(9));
+        QSignalSpy changed(&model, &QAbstractItemModel::dataChanged);
+        QSignalSpy errors(&model, &UI::WidgetModel::persistenceError);
+
+        operations->failWrites = true;
+        QVERIFY(!model.setTotalSlots(7));
+        QCOMPARE(operations->writeAttempts, 1);
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(changed.count(), 0);
+
+        QVERIFY(!model.dropWidget(QStringLiteral("clock"), 4));
+        QCOMPARE(operations->writeAttempts, 1);
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(changed.count(), 0);
+        QVERIFY2(model.lastError().contains("7"), qPrintable(model.lastError()));
+        QCOMPARE(model.data(model.index(0), UI::WidgetModel::SlotRole).toInt(), 6);
+
+        operations->failWrites = false;
+        QVERIFY(model.setTotalSlots(7));
+        QCOMPARE(operations->writeAttempts, 2);
+        QCOMPARE(model.data(model.index(0), UI::WidgetModel::SlotRole).toInt(), 4);
+        QCOMPARE(changed.count(), 1);
+
+        QVERIFY(model.dropWidget(QStringLiteral("clock"), 4));
+        QVERIFY(model.setTotalSlots(10));
+        QCOMPARE(operations->writeAttempts, 2);
     }
 
     void dropSwapsOneCollisionAndRejectsMultipleCollisions()

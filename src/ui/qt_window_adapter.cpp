@@ -51,8 +51,6 @@ namespace UI {
                     .arg(configPath, configResult.error())
                     .toStdString());
         }
-        m_cpuService->start();
-
         m_engine->rootContext()->setContextProperty("reservedBarHeight", static_cast<int>(Core::WindowManager::LOGICAL_BAR_HEIGHT));
         m_engine->rootContext()->setContextProperty("widgetModel", m_widgetModel.get());
 

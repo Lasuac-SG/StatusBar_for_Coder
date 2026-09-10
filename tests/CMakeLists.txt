@@ -35,5 +35,8 @@ qt_add_executable(resource_embedding_test
     ${PROJECT_SOURCE_DIR}/resources.qrc
 )
 set_target_properties(resource_embedding_test PROPERTIES AUTORCC ON)
-target_link_libraries(resource_embedding_test PRIVATE statusbar_core Qt6::Test)
+target_link_libraries(resource_embedding_test PRIVATE
+    statusbar_core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test)
 add_test(NAME resource_embedding_test COMMAND resource_embedding_test)
+set_tests_properties(resource_embedding_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

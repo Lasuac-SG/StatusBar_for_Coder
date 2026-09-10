@@ -156,7 +156,14 @@ private slots:
 
         const QString destination = directory.filePath("config.json");
         const QString legacy = directory.filePath("legacy.json");
-        const QByteArray legacyBytes = R"({ "widgets": [{"name":"Clock","slot":2}] })";
+        const QByteArray legacyBytes = R"({
+            "legacyRoot": {"nested": [1, true, "keep"]},
+            "widgets": [{
+                "name": "Clock",
+                "slot": 2,
+                "legacyWidget": {"keep": 42}
+            }]
+        })";
         QVERIFY(writeBytes(legacy, legacyBytes));
 
         const Core::ConfigRepository repository(destination, {legacy});
@@ -171,6 +178,13 @@ private slots:
         QCOMPARE(widget.type, QString("Clock"));
         QCOMPARE(widget.slot, 2);
         QVERIFY(widget.settings.isEmpty());
+        QCOMPARE(result.value().extensions.value("legacyRoot"),
+                 QJsonValue(QJsonObject{{"nested", QJsonArray{1, true, "keep"}}}));
+        QVERIFY(!result.value().extensions.contains("widgets"));
+        QCOMPARE(widget.extensions.value("legacyWidget"),
+                 QJsonValue(QJsonObject{{"keep", 42}}));
+        QVERIFY(!widget.extensions.contains("name"));
+        QVERIFY(!widget.extensions.contains("slot"));
 
         QCOMPARE(readBytes(legacy), legacyBytes);
         QCOMPARE(readBytes(directory.filePath("config.legacy.backup.json")), legacyBytes);
@@ -180,6 +194,13 @@ private slots:
         QCOMPARE(parseError.error, QJsonParseError::NoError);
         QCOMPARE(migrated.object().value("version").toInt(), 1);
         QCOMPARE(migrated.object().value("widgets").toArray().size(), 1);
+        QCOMPARE(migrated.object().value("legacyRoot"),
+                 QJsonValue(QJsonObject{{"nested", QJsonArray{1, true, "keep"}}}));
+        const QJsonObject migratedWidget =
+            migrated.object().value("widgets").toArray().at(0).toObject();
+        QVERIFY(!migratedWidget.contains("name"));
+        QCOMPARE(migratedWidget.value("legacyWidget"),
+                 QJsonValue(QJsonObject{{"keep", 42}}));
     }
 
     void leavesMalformedSourceUntouched()
@@ -264,13 +285,23 @@ private slots:
             {"provider", "future"},
             {"options", QJsonObject{{"accent", "violet"}}},
         };
+        const QJsonValue rootMetadata = QJsonObject{
+            {"owner", "future"},
+            {"nested", QJsonArray{QJsonObject{{"enabled", true}}, 17}},
+        };
+        const QJsonValue widgetMetadata = QJsonObject{
+            {"accent", "violet"},
+            {"nested", QJsonArray{1, 2, QJsonObject{{"keep", true}}}},
+        };
         const QJsonObject root{
             {"version", 1},
+            {"metadata", rootMetadata},
             {"widgets", QJsonArray{QJsonObject{
                             {"id", "future-widget"},
                             {"type", "WidgetFromTheFuture"},
                             {"slot", 7},
                             {"settings", unknownSettings},
+                            {"futurePayload", widgetMetadata},
                         }}},
         };
         QVERIFY(writeBytes(destination, QJsonDocument(root).toJson(QJsonDocument::Compact)));
@@ -281,12 +312,49 @@ private slots:
         QCOMPARE(loaded.value().widgets.size(), 1);
         QCOMPARE(loaded.value().widgets.front().type, QString("WidgetFromTheFuture"));
         QCOMPARE(loaded.value().widgets.front().settings, unknownSettings);
+        QCOMPARE(loaded.value().extensions.value("metadata"), rootMetadata);
+        QCOMPARE(loaded.value().widgets.front().extensions.value("futurePayload"),
+                 widgetMetadata);
 
-        const auto saved = repository.save(loaded.value());
+        auto document = loaded.value();
+        document.version = 1;
+        document.extensions.insert("version", 99);
+        document.extensions.insert("widgets", QStringLiteral("not-an-array"));
+        document.widgets.front().slot = 9;
+        document.widgets.front().extensions.insert("id", QStringLiteral("wrong-id"));
+        document.widgets.front().extensions.insert("type", QStringLiteral("wrong-type"));
+        document.widgets.front().extensions.insert("slot", 999);
+        document.widgets.front().extensions.insert("settings", QStringLiteral("wrong-settings"));
+
+        const auto saved = repository.save(document);
         QVERIFY2(saved.hasValue(), qPrintable(saved.error()));
         const auto reloaded = repository.load();
         QVERIFY2(reloaded.hasValue(), qPrintable(reloaded.error()));
-        QCOMPARE(reloaded.value().widgets, loaded.value().widgets);
+        QCOMPARE(reloaded.value().version, 1);
+        QCOMPARE(reloaded.value().extensions.value("metadata"), rootMetadata);
+        QCOMPARE(reloaded.value().widgets.size(), 1);
+        const auto& reloadedWidget = reloaded.value().widgets.front();
+        QCOMPARE(reloadedWidget.id, QString("future-widget"));
+        QCOMPARE(reloadedWidget.type, QString("WidgetFromTheFuture"));
+        QCOMPARE(reloadedWidget.slot, 9);
+        QCOMPARE(reloadedWidget.settings, unknownSettings);
+        QCOMPARE(reloadedWidget.extensions.value("futurePayload"), widgetMetadata);
+
+        QJsonParseError savedParseError;
+        const QJsonObject savedRoot =
+            QJsonDocument::fromJson(readBytes(destination), &savedParseError).object();
+        QCOMPARE(savedParseError.error, QJsonParseError::NoError);
+        QCOMPARE(savedRoot.value("version"), QJsonValue(1));
+        QVERIFY(savedRoot.value("widgets").isArray());
+        QCOMPARE(savedRoot.value("metadata"), rootMetadata);
+        const QJsonObject savedWidget =
+            savedRoot.value("widgets").toArray().at(0).toObject();
+        QCOMPARE(savedWidget.value("id"), QJsonValue(QStringLiteral("future-widget")));
+        QCOMPARE(savedWidget.value("type"),
+                 QJsonValue(QStringLiteral("WidgetFromTheFuture")));
+        QCOMPARE(savedWidget.value("slot"), QJsonValue(9));
+        QCOMPARE(savedWidget.value("settings"), QJsonValue(unknownSettings));
+        QCOMPARE(savedWidget.value("futurePayload"), widgetMetadata);
     }
 
     void rejectsDuplicateIdsAndInvalidSlots()

@@ -75,7 +75,8 @@ private:
     Core::ConfigDocument m_document;
     QList<Core::WidgetConfig> m_unavailableConfigs;
     std::vector<WidgetInstance> m_instances;
-    int m_totalSlots{-1};
+    int m_requestedTotalSlots{-1};
+    bool m_layoutReadyForRequestedSlots{};
     QString m_lastError;
 };
 

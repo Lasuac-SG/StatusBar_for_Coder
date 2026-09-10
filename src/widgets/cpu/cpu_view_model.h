@@ -49,6 +49,7 @@ private:
 
     Core::WidgetConfig m_config;
     QPointer<Platform::CpuService> m_service;
+    Platform::CpuService::ConsumerLease m_consumerLease;
     QVariantList m_history;
     int m_cpuPercent{};
     int m_currentFrequencyMHz{};

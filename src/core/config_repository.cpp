@@ -146,6 +146,9 @@ Result<ConfigDocument> parseVersionOne(const QByteArray& bytes)
     }
 
     ConfigDocument document;
+    document.extensions = root;
+    document.extensions.remove(QStringLiteral("version"));
+    document.extensions.remove(QStringLiteral("widgets"));
     const QJsonArray widgets = widgetsValue.toArray();
     document.widgets.reserve(widgets.size());
     for (qsizetype index = 0; index < widgets.size(); ++index) {
@@ -186,8 +189,18 @@ Result<ConfigDocument> parseVersionOne(const QByteArray& bytes)
                 QStringLiteral("Widget %1 field 'settings' must be an object").arg(index));
         }
 
-        document.widgets.append(
-            WidgetConfig{idValue.toString(), typeValue.toString(), slot, settingsValue.toObject()});
+        QJsonObject extensions = entry;
+        extensions.remove(QStringLiteral("id"));
+        extensions.remove(QStringLiteral("type"));
+        extensions.remove(QStringLiteral("slot"));
+        extensions.remove(QStringLiteral("settings"));
+        document.widgets.append(WidgetConfig{
+            idValue.toString(),
+            typeValue.toString(),
+            slot,
+            settingsValue.toObject(),
+            std::move(extensions),
+        });
     }
 
     const auto validation = validate(document);
@@ -211,13 +224,17 @@ Result<ConfigDocument> parseLegacy(const QByteArray& bytes)
             QStringLiteral("Legacy configuration root must be an object"));
     }
 
-    const QJsonValue widgetsValue = json.object().value(QStringLiteral("widgets"));
+    const QJsonObject root = json.object();
+    const QJsonValue widgetsValue = root.value(QStringLiteral("widgets"));
     if (!widgetsValue.isArray()) {
         return Result<ConfigDocument>::failure(
             QStringLiteral("Legacy configuration widgets must be an array"));
     }
 
     ConfigDocument document;
+    document.extensions = root;
+    document.extensions.remove(QStringLiteral("version"));
+    document.extensions.remove(QStringLiteral("widgets"));
     const QJsonArray widgets = widgetsValue.toArray();
     document.widgets.reserve(widgets.size());
     for (qsizetype index = 0; index < widgets.size(); ++index) {
@@ -244,11 +261,18 @@ Result<ConfigDocument> parseLegacy(const QByteArray& bytes)
                     .arg(index));
         }
 
+        QJsonObject extensions = entry;
+        extensions.remove(QStringLiteral("name"));
+        extensions.remove(QStringLiteral("id"));
+        extensions.remove(QStringLiteral("type"));
+        extensions.remove(QStringLiteral("slot"));
+        extensions.remove(QStringLiteral("settings"));
         document.widgets.append(WidgetConfig{
             QUuid::createUuid().toString(QUuid::WithoutBraces),
             nameValue.toString(),
             slot,
             {},
+            std::move(extensions),
         });
     }
 
@@ -263,19 +287,18 @@ QByteArray serialize(const ConfigDocument& document)
 {
     QJsonArray widgets;
     for (const auto& widget : document.widgets) {
-        widgets.append(QJsonObject{
-            {QStringLiteral("id"), widget.id},
-            {QStringLiteral("type"), widget.type},
-            {QStringLiteral("slot"), widget.slot},
-            {QStringLiteral("settings"), widget.settings},
-        });
+        QJsonObject serializedWidget = widget.extensions;
+        serializedWidget.insert(QStringLiteral("id"), widget.id);
+        serializedWidget.insert(QStringLiteral("type"), widget.type);
+        serializedWidget.insert(QStringLiteral("slot"), widget.slot);
+        serializedWidget.insert(QStringLiteral("settings"), widget.settings);
+        widgets.append(std::move(serializedWidget));
     }
 
-    return QJsonDocument(QJsonObject{
-                             {QStringLiteral("version"), document.version},
-                             {QStringLiteral("widgets"), widgets},
-                         })
-        .toJson(QJsonDocument::Indented);
+    QJsonObject root = document.extensions;
+    root.insert(QStringLiteral("version"), document.version);
+    root.insert(QStringLiteral("widgets"), widgets);
+    return QJsonDocument(std::move(root)).toJson(QJsonDocument::Indented);
 }
 
 QString cleanAbsolutePath(const QString& path)

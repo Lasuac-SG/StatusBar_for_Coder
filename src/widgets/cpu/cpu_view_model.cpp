@@ -33,6 +33,7 @@ CpuViewModel::CpuViewModel(
         &Platform::CpuService::historyChanged,
         this,
         &CpuViewModel::syncHistory);
+    m_consumerLease = service.acquireConsumer();
 }
 
 void CpuViewModel::syncCpuPercent()

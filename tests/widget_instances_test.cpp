@@ -9,8 +9,14 @@
 #include <QtTest>
 
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
+
+static_assert(!std::is_copy_constructible_v<Platform::CpuService::ConsumerLease>);
+static_assert(!std::is_copy_assignable_v<Platform::CpuService::ConsumerLease>);
+static_assert(std::is_nothrow_move_constructible_v<Platform::CpuService::ConsumerLease>);
+static_assert(std::is_nothrow_move_assignable_v<Platform::CpuService::ConsumerLease>);
 
 namespace {
 
@@ -75,6 +81,66 @@ class WidgetInstancesTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    void cpuViewModelLeasesPrimeOnceAndStopAfterLastConsumer()
+    {
+        auto source = sourceWith({
+            {Platform::CpuTimes{0, 0, 0}},
+            {Platform::CpuTimes{50, 100, 0}},
+        });
+        auto* const counts = source.get();
+        Platform::CpuService service(std::move(source));
+        auto* const timer = service.findChild<QTimer*>();
+        QVERIFY(timer != nullptr);
+        QVERIFY(!timer->isActive());
+
+        auto first = std::make_unique<Widgets::CpuViewModel>(
+            Core::WidgetConfig{"first", "Cpu", 0, {}}, service);
+        QVERIFY(timer->isActive());
+        QCOMPARE(counts->timesCalls, 1);
+
+        auto second = std::make_unique<Widgets::CpuViewModel>(
+            Core::WidgetConfig{"second", "Cpu", 2, {}}, service);
+        QVERIFY(timer->isActive());
+        QCOMPARE(counts->timesCalls, 1);
+
+        first.reset();
+        QVERIFY(timer->isActive());
+        second.reset();
+        QVERIFY(!timer->isActive());
+    }
+
+    void manualAndConsumerOwnershipDoNotStopEachOther()
+    {
+        auto source = sourceWith({
+            {Platform::CpuTimes{0, 0, 0}},
+            {Platform::CpuTimes{50, 100, 0}},
+        });
+        auto* const counts = source.get();
+        Platform::CpuService service(std::move(source));
+        auto* const timer = service.findChild<QTimer*>();
+        QVERIFY(timer != nullptr);
+
+        service.start();
+        QCOMPARE(counts->timesCalls, 1);
+        auto consumer = std::make_unique<Widgets::CpuViewModel>(
+            Core::WidgetConfig{"cpu", "Cpu", 0, {}}, service);
+        QCOMPARE(counts->timesCalls, 1);
+        service.stop();
+        QVERIFY(timer->isActive());
+        consumer.reset();
+        QVERIFY(!timer->isActive());
+
+        auto secondConsumer = std::make_unique<Widgets::CpuViewModel>(
+            Core::WidgetConfig{"cpu-two", "Cpu", 0, {}}, service);
+        QCOMPARE(counts->timesCalls, 2);
+        service.start();
+        QCOMPARE(counts->timesCalls, 2);
+        secondConsumer.reset();
+        QVERIFY(timer->isActive());
+        service.stop();
+        QVERIFY(!timer->isActive());
+    }
+
     void sharedCpuServiceSamplesOnceForTwoViewModels()
     {
         auto source = sourceWith(
@@ -83,7 +149,6 @@ private slots:
             {{1.0}, {0.5}});
         auto* const counts = source.get();
         Platform::CpuService service(std::move(source));
-        service.sampleNow();
 
         Widgets::CpuViewModel first(
             Core::WidgetConfig{"cpu-left", "Cpu", 0, QJsonObject{{"label", "left"}}},
@@ -143,7 +208,7 @@ private slots:
         service.sampleNow();
         service.sampleNow();
 
-        QCOMPARE(firstFrequencyChanged.count(), 2);
+        QCOMPARE(firstFrequencyChanged.count(), 1);
         QCOMPARE(secondHistoryChanged.count(), 1);
         QCOMPARE(first.physicalCores(), 8);
         QCOMPARE(second.logicalCores(), 16);
@@ -156,7 +221,6 @@ private slots:
             {{Platform::CpuTimes{0, 0, 0}}, {Platform::CpuTimes{50, 100, 0}}},
             {{1.0}, {0.5}});
         auto service = std::make_unique<Platform::CpuService>(std::move(source));
-        service->sampleNow();
 
         auto viewModel = std::make_unique<Widgets::CpuViewModel>(
             Core::WidgetConfig{"cpu", "Cpu", 0, QJsonObject{{"label", "safe"}}},

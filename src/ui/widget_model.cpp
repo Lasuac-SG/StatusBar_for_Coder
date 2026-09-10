@@ -123,7 +123,8 @@ Core::Result<void> WidgetModel::loadFromConfig()
     m_document = std::move(loadedDocument);
     m_unavailableConfigs = std::move(unavailableConfigs);
     m_instances = std::move(loadedInstances);
-    m_totalSlots = -1;
+    m_requestedTotalSlots = -1;
+    m_layoutReadyForRequestedSlots = false;
     endResetModel();
     setLastError({});
     return Core::Result<void>::success();
@@ -131,6 +132,9 @@ Core::Result<void> WidgetModel::loadFromConfig()
 
 bool WidgetModel::setTotalSlots(const int totalSlots)
 {
+    m_requestedTotalSlots = totalSlots;
+    m_layoutReadyForRequestedSlots = false;
+
     if (totalSlots < 0) {
         setLastError(QStringLiteral("Cannot normalize widget layout: total slots is negative"));
         return false;
@@ -150,22 +154,24 @@ bool WidgetModel::setTotalSlots(const int totalSlots)
 
 bool WidgetModel::dropWidget(const QString& instanceId, const int targetSlot)
 {
-    if (m_totalSlots < 0) {
+    const auto current = currentLayout();
+    if (!m_layoutReadyForRequestedSlots || m_requestedTotalSlots < 0
+        || !Core::LayoutEngine::isValid(current, m_requestedTotalSlots)) {
         setLastError(QStringLiteral(
-            "Cannot move widget: total slots must be set before dropping"));
+            "Cannot move widget: layout is not ready for requested %1 slots")
+                         .arg(m_requestedTotalSlots));
         return false;
     }
 
-    const auto current = currentLayout();
     const auto candidate = Core::LayoutEngine::drop(
-        current, instanceId.toStdString(), targetSlot, m_totalSlots);
+        current, instanceId.toStdString(), targetSlot, m_requestedTotalSlots);
     if (!candidate.has_value()) {
         setLastError(QStringLiteral(
             "Cannot move widget '%1': layout transaction was rejected")
                          .arg(instanceId));
         return false;
     }
-    return commitLayout(*candidate, m_totalSlots);
+    return commitLayout(*candidate, m_requestedTotalSlots);
 }
 
 std::vector<Core::LayoutItem> WidgetModel::currentLayout() const
@@ -221,7 +227,7 @@ bool WidgetModel::commitLayout(
 {
     const auto current = currentLayout();
     if (layout == current) {
-        m_totalSlots = totalSlots;
+        m_layoutReadyForRequestedSlots = true;
         setLastError({});
         return true;
     }
@@ -255,7 +261,7 @@ bool WidgetModel::commitLayout(
         m_instances[static_cast<std::size_t>(row)].config.slot =
             layout[static_cast<std::size_t>(row)].slot;
     }
-    m_totalSlots = totalSlots;
+    m_layoutReadyForRequestedSlots = true;
     emitSlotChanges(changedRows);
     setLastError({});
     return true;

@@ -174,6 +174,43 @@ std::optional<CpuTopology> WindowsCpuDataSource::topology() noexcept
     }
 }
 
+CpuService::ConsumerLease::ConsumerLease(CpuService& service) noexcept
+    : m_service(&service)
+{
+}
+
+CpuService::ConsumerLease::~ConsumerLease()
+{
+    reset();
+}
+
+CpuService::ConsumerLease::ConsumerLease(ConsumerLease&& other) noexcept
+    : m_service(other.m_service)
+{
+    other.m_service.clear();
+}
+
+CpuService::ConsumerLease& CpuService::ConsumerLease::operator=(
+    ConsumerLease&& other) noexcept
+{
+    if (this == &other) {
+        return *this;
+    }
+
+    reset();
+    m_service = other.m_service;
+    other.m_service.clear();
+    return *this;
+}
+
+void CpuService::ConsumerLease::reset() noexcept
+{
+    if (m_service != nullptr) {
+        m_service->releaseConsumer();
+        m_service.clear();
+    }
+}
+
 CpuService::CpuService(std::unique_ptr<CpuDataSource> source, QObject* parent)
     : QObject(parent)
     , m_source(std::move(source))
@@ -196,6 +233,49 @@ CpuService::~CpuService() = default;
 
 void CpuService::start()
 {
+    if (m_manualStartRequested) {
+        return;
+    }
+
+    m_manualStartRequested = true;
+    updateRunningState();
+}
+
+void CpuService::stop()
+{
+    if (!m_manualStartRequested) {
+        return;
+    }
+
+    m_manualStartRequested = false;
+    updateRunningState();
+}
+
+CpuService::ConsumerLease CpuService::acquireConsumer()
+{
+    ConsumerLease lease(*this);
+    ++m_consumerCount;
+    updateRunningState();
+    return lease;
+}
+
+void CpuService::releaseConsumer() noexcept
+{
+    if (m_consumerCount == 0) {
+        return;
+    }
+
+    --m_consumerCount;
+    updateRunningState();
+}
+
+void CpuService::updateRunningState()
+{
+    const bool shouldRun = m_manualStartRequested || m_consumerCount > 0;
+    if (!shouldRun) {
+        m_timer.stop();
+        return;
+    }
     if (m_source == nullptr || m_timer.isActive()) {
         return;
     }
@@ -203,13 +283,6 @@ void CpuService::start()
     m_previousTimes.reset();
     m_timer.start();
     sampleNow();
-}
-
-void CpuService::stop()
-{
-    if (m_timer.isActive()) {
-        m_timer.stop();
-    }
 }
 
 void CpuService::sampleNow()

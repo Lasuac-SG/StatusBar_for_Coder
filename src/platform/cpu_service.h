@@ -3,6 +3,7 @@
 #include "platform/cpu_data_source.h"
 
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
 #include <QVariantList>
 
@@ -23,6 +24,25 @@ class CpuService final : public QObject {
     Q_PROPERTY(QVariantList history READ history NOTIFY historyChanged)
 
 public:
+    class ConsumerLease final {
+    public:
+        ConsumerLease() noexcept = default;
+        ~ConsumerLease();
+
+        ConsumerLease(const ConsumerLease&) = delete;
+        ConsumerLease& operator=(const ConsumerLease&) = delete;
+        ConsumerLease(ConsumerLease&& other) noexcept;
+        ConsumerLease& operator=(ConsumerLease&& other) noexcept;
+
+    private:
+        friend class CpuService;
+
+        explicit ConsumerLease(CpuService& service) noexcept;
+        void reset() noexcept;
+
+        QPointer<CpuService> m_service;
+    };
+
     explicit CpuService(std::unique_ptr<CpuDataSource> source, QObject* parent = nullptr);
     ~CpuService() override;
 
@@ -35,6 +55,7 @@ public:
 
     void start();
     void stop();
+    [[nodiscard]] ConsumerLease acquireConsumer();
     Q_INVOKABLE void sampleNow();
 
 signals:
@@ -47,6 +68,8 @@ private:
 
     void appendHistory(int value);
     void updateFrequency(std::optional<double> ratio);
+    void updateRunningState();
+    void releaseConsumer() noexcept;
 
     std::unique_ptr<CpuDataSource> m_source;
     QTimer m_timer;
@@ -60,6 +83,8 @@ private:
     int m_maxFrequencyMHz{};
     int m_physicalCores{};
     int m_logicalCores{};
+    std::size_t m_consumerCount{};
+    bool m_manualStartRequested{};
 };
 
 } // namespace Platform

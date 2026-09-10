@@ -183,8 +183,10 @@ private slots:
             Core::WidgetConfig{"clock-two", "Clock", 3, {}}, context);
         auto firstCpu = cpuDescriptor->create(
             Core::WidgetConfig{"cpu-one", "Cpu", 6, {}}, context);
+        QCOMPARE(sourceCounts->timesCalls, 1);
         auto secondCpu = cpuDescriptor->create(
             Core::WidgetConfig{"cpu-two", "Cpu", 8, {}}, context);
+        QCOMPARE(sourceCounts->timesCalls, 1);
 
         QVERIFY(firstClock != nullptr);
         QVERIFY(secondClock != nullptr);
@@ -204,7 +206,6 @@ private slots:
         QSignalSpy firstChanged(firstCpuVm, &Widgets::CpuViewModel::cpuPercentChanged);
         QSignalSpy secondChanged(secondCpuVm, &Widgets::CpuViewModel::cpuPercentChanged);
 
-        cpuService.sampleNow();
         cpuService.sampleNow();
 
         QCOMPARE(sourceCounts->timesCalls, 2);
