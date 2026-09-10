@@ -10,6 +10,7 @@
 
 #include <QAccessible>
 #include <QFile>
+#include <QGuiApplication>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QQmlApplicationEngine>
@@ -17,6 +18,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QSignalSpy>
+#include <QStyleHints>
 #include <QTemporaryDir>
 #include <QStringList>
 
@@ -76,45 +78,64 @@ QQuickItem* findQuickItem(QQuickItem* root, const QString& objectName)
     return nullptr;
 }
 
-QObject* findQuickObjectByClassName(QQuickItem* root, QByteArrayView classNameFragment)
-{
-    for (QObject* const child : root->children()) {
-        if (QByteArrayView(child->metaObject()->className()).contains(classNameFragment)) {
-            return child;
-        }
-    }
-    for (QQuickItem* const child : root->childItems()) {
-        if (QObject* const match = findQuickObjectByClassName(child, classNameFragment)) {
-            return match;
-        }
-    }
-    return nullptr;
-}
-
 struct ModelFixture final {
     QTemporaryDir directory;
     Platform::CpuService cpuService{std::make_unique<NullCpuDataSource>()};
     Widgets::WidgetContext context{cpuService};
-    UI::WidgetModel model;
+    std::unique_ptr<UI::WidgetModel> model;
+    Core::Result<void> setupResult{
+        Core::Result<void>::failure(QStringLiteral("Fixture setup did not run"))};
 
     explicit ModelFixture(QList<Core::WidgetConfig> widgets)
-        : model(
-              Core::ConfigRepository(directory.filePath(QStringLiteral("config.json"))),
-              registry(),
-              context)
     {
-        Q_ASSERT(directory.isValid());
+        if (!directory.isValid()) {
+            setupResult = Core::Result<void>::failure(
+                QStringLiteral("Could not create fixture temporary directory"));
+            return;
+        }
+
+        auto registryResult = Widgets::registerAllWidgets();
+        if (!registryResult.hasValue()) {
+            setupResult = Core::Result<void>::failure(
+                QStringLiteral("Could not create widget registry: %1")
+                    .arg(registryResult.error()));
+            return;
+        }
+
         Core::ConfigRepository repository(directory.filePath(QStringLiteral("config.json")));
-        Q_ASSERT(repository.save(Core::ConfigDocument{1, std::move(widgets)}).hasValue());
-        Q_ASSERT(model.loadFromConfig().hasValue());
+        const auto saveResult = repository.save(
+            Core::ConfigDocument{1, std::move(widgets)});
+        if (!saveResult.hasValue()) {
+            setupResult = Core::Result<void>::failure(
+                QStringLiteral("Could not save fixture configuration: %1")
+                    .arg(saveResult.error()));
+            return;
+        }
+
+        model = std::make_unique<UI::WidgetModel>(
+            repository, std::move(registryResult).value(), context);
+        const auto loadResult = model->loadFromConfig();
+        if (!loadResult.hasValue()) {
+            setupResult = Core::Result<void>::failure(
+                QStringLiteral("Could not load fixture configuration: %1")
+                    .arg(loadResult.error()));
+            model.reset();
+            return;
+        }
+
+        setupResult = Core::Result<void>::success();
     }
 
-private:
-    static Widgets::WidgetRegistry registry()
+    [[nodiscard]] bool isReady() const noexcept
     {
-        auto result = Widgets::registerAllWidgets();
-        Q_ASSERT(result.hasValue());
-        return std::move(result).value();
+        return setupResult.hasValue() && model != nullptr;
+    }
+
+    [[nodiscard]] QString error() const
+    {
+        return setupResult.hasValue()
+            ? QStringLiteral("Fixture model was not created")
+            : setupResult.error();
     }
 };
 
@@ -154,6 +175,9 @@ private slots:
         auto registryResult = Widgets::registerAllWidgets();
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         const auto registry = std::move(registryResult).value();
+        QCOMPARE(registry.descriptors().size(), std::size_t{2});
+        QVERIFY(registry.find(QStringLiteral("Clock")) != nullptr);
+        QVERIFY(registry.find(QStringLiteral("Cpu")) != nullptr);
         QCOMPARE(
             registry.find(QStringLiteral("Clock"))->qmlUrl,
             QUrl(QStringLiteral("qrc:/qt/qml/StatusBar/ClockWidget.qml")));
@@ -170,6 +194,8 @@ private slots:
     void mainRequiresARealWidgetModelAndStartsHidden()
     {
         ModelFixture fixture({});
+        QVERIFY2(fixture.isReady(), qPrintable(fixture.error()));
+        QCOMPARE(fixture.model->rowCount(), 0);
         QQmlApplicationEngine engine;
         QSignalSpy qmlWarnings(&engine, &QQmlEngine::warnings);
         QVERIFY(!engine.rootContext()->contextProperty(QStringLiteral("widgetModel")).isValid());
@@ -177,7 +203,7 @@ private slots:
         QVERIFY(!engine.rootContext()->contextProperty(QStringLiteral("cpuAdapter")).isValid());
 
         engine.setInitialProperties({
-            {QStringLiteral("widgetModel"), QVariant::fromValue(&fixture.model)},
+            {QStringLiteral("widgetModel"), QVariant::fromValue(fixture.model.get())},
         });
         engine.loadFromModule(QStringLiteral("StatusBar"), QStringLiteral("Main"));
 
@@ -186,7 +212,7 @@ private slots:
         auto* const window = qobject_cast<QQuickWindow*>(root);
         QVERIFY(window != nullptr);
         QVERIFY(!window->isVisible());
-        QCOMPARE(root->property("widgetModel").value<UI::WidgetModel*>(), &fixture.model);
+        QCOMPARE(root->property("widgetModel").value<UI::WidgetModel*>(), fixture.model.get());
         QCOMPARE(qmlWarnings.count(), 0);
     }
 
@@ -196,6 +222,8 @@ private slots:
             {"clock", "Clock", 0, {}},
             {"cpu", "Cpu", 3, {}},
         });
+        QVERIFY2(fixture.isReady(), qPrintable(fixture.error()));
+        QCOMPARE(fixture.model->rowCount(), 2);
         QQmlEngine engine;
         QSignalSpy qmlWarnings(&engine, &QQmlEngine::warnings);
         QQmlComponent editingWindowComponent(&engine);
@@ -209,17 +237,19 @@ private slots:
             qobject_cast<QQuickWindow*>(editingWindowComponent.create()));
         QVERIFY2(editingWindow != nullptr, qPrintable(errorText(editingWindowComponent)));
 
-        for (int row = 0; row < fixture.model.rowCount(); ++row) {
-            const auto index = fixture.model.index(row);
-            const QUrl qmlUrl = fixture.model.data(index, UI::WidgetModel::QmlUrlRole).toUrl();
+        int createdComponentCount = 0;
+        for (int row = 0; row < fixture.model->rowCount(); ++row) {
+            const auto index = fixture.model->index(row);
+            const QUrl qmlUrl = fixture.model->data(index, UI::WidgetModel::QmlUrlRole).toUrl();
             auto* const viewModel = fixture.model
-                                        .data(index, UI::WidgetModel::ViewModelRole)
+                                        ->data(index, UI::WidgetModel::ViewModelRole)
                                         .value<Widgets::WidgetViewModel*>();
             QVERIFY(viewModel != nullptr);
             QQmlComponent component(&engine, qmlUrl);
             QVERIFY2(component.status() == QQmlComponent::Ready, qPrintable(errorText(component)));
             auto object = createWidgetObject(component, viewModel, editingWindow.get());
             QVERIFY2(object != nullptr, qPrintable(errorText(component)));
+            ++createdComponentCount;
             QCOMPARE(qmlWarnings.count(), 0);
             QCOMPARE(
                 object->property("viewModel").value<Widgets::WidgetViewModel*>(),
@@ -247,6 +277,7 @@ private slots:
                 QCOMPARE(qmlWarnings.count(), 0);
             }
         }
+        QCOMPARE(createdComponentCount, 2);
     }
 
     void widgetHostPreservesTypedInitialProperties()
@@ -255,6 +286,8 @@ private slots:
             {"clock", "Clock", 0, {}},
             {"cpu", "Cpu", 3, {}},
         });
+        QVERIFY2(fixture.isReady(), qPrintable(fixture.error()));
+        QCOMPARE(fixture.model->rowCount(), 2);
         QQmlEngine engine;
         QSignalSpy qmlWarnings(&engine, &QQmlEngine::warnings);
         QQmlComponent editingWindowComponent(&engine);
@@ -273,11 +306,11 @@ private slots:
             hostComponent.status() == QQmlComponent::Ready,
             qPrintable(errorText(hostComponent)));
 
-        for (int row = 0; row < fixture.model.rowCount(); ++row) {
-            const auto index = fixture.model.index(row);
-            const QUrl qmlUrl = fixture.model.data(index, UI::WidgetModel::QmlUrlRole).toUrl();
+        for (int row = 0; row < fixture.model->rowCount(); ++row) {
+            const auto index = fixture.model->index(row);
+            const QUrl qmlUrl = fixture.model->data(index, UI::WidgetModel::QmlUrlRole).toUrl();
             auto* const viewModel = fixture.model
-                                        .data(index, UI::WidgetModel::ViewModelRole)
+                                        ->data(index, UI::WidgetModel::ViewModelRole)
                                         .value<Widgets::WidgetViewModel*>();
             QVERIFY(viewModel != nullptr);
             std::unique_ptr<QObject> host(hostComponent.createWithInitialProperties({
@@ -308,10 +341,12 @@ private slots:
         ModelFixture fixture({
             {"cpu", "Cpu", 0, {}},
         });
+        QVERIFY2(fixture.isReady(), qPrintable(fixture.error()));
+        QCOMPARE(fixture.model->rowCount(), 1);
         QQmlApplicationEngine engine;
         QSignalSpy qmlWarnings(&engine, &QQmlEngine::warnings);
         engine.setInitialProperties({
-            {QStringLiteral("widgetModel"), QVariant::fromValue(&fixture.model)},
+            {QStringLiteral("widgetModel"), QVariant::fromValue(fixture.model.get())},
         });
         engine.loadFromModule(QStringLiteral("StatusBar"), QStringLiteral("Main"));
 
@@ -332,41 +367,55 @@ private slots:
         QObject* const detailLoader = cpuWidget->findChild<QObject*>(
             QStringLiteral("cpuDetailLoader"));
         QVERIFY(detailLoader != nullptr);
-        QSignalSpy editingChanged(root, SIGNAL(isEditingChanged()));
-        QVERIFY(editingChanged.isValid());
-
-        QVERIFY(QMetaObject::invokeMethod(cpuWidget, "handleLongPress"));
-        QCOMPARE(root->property("isEditing").toBool(), true);
-        QCOMPARE(editingChanged.count(), 1);
-
-        QObject* const editTapHandler = findQuickObjectByClassName(
-            window->contentItem(), QByteArrayView("TapHandler"));
-        QVERIFY(editTapHandler != nullptr);
-        QVERIFY(QMetaObject::invokeMethod(editTapHandler, "longPressed"));
-        QCOMPARE(root->property("isEditing").toBool(), true);
-        QCOMPARE(editingChanged.count(), 1);
-
-        QVERIFY(QMetaObject::invokeMethod(cpuWidget, "handleClick"));
-        QCOMPARE(root->property("isEditing").toBool(), true);
-        QCOMPARE(detailLoader->property("active").toBool(), false);
 
         QFile config(fixture.directory.filePath(QStringLiteral("config.json")));
         QVERIFY(config.open(QIODevice::ReadOnly));
-        const QByteArray configBeforeClick = config.readAll();
+        const QByteArray configBeforeHold = config.readAll();
         config.close();
 
         window->show();
         QTRY_VERIFY_WITH_TIMEOUT(window->isVisible(), 1000);
-        const QPoint clickPosition = cpuWidget
-                                         ->mapToScene(QPointF(
-                                             cpuWidget->width() / 2,
-                                             cpuWidget->height() / 2))
-                                         .toPoint();
-        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, clickPosition);
+        QQuickItem* const interactionArea = findQuickItem(
+            cpuWidget, QStringLiteral("cpuInteractionArea"));
+        QVERIFY(interactionArea != nullptr);
+        QVERIFY(interactionArea->width() > 0);
+        QVERIFY(interactionArea->height() > 0);
+
+        QSignalSpy editingChanged(root, SIGNAL(isEditingChanged()));
+        QSignalSpy modelChanged(fixture.model.get(), &QAbstractItemModel::dataChanged);
+        QVERIFY(editingChanged.isValid());
+        QVERIFY(modelChanged.isValid());
+
+        const int holdInterval = QGuiApplication::styleHints()->mousePressAndHoldInterval();
+        QVERIFY(holdInterval > 0);
+        QVERIFY2(holdInterval <= 2000, "Platform press-and-hold interval is unexpectedly long");
+        QCOMPARE(interactionArea->property("pressAndHoldInterval").toInt(), holdInterval);
+        const QPoint holdPosition = interactionArea
+                                        ->mapToScene(QPointF(
+                                            interactionArea->width() / 2,
+                                            interactionArea->height() / 2))
+                                        .toPoint();
+
+        QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, holdPosition);
+        QVERIFY(interactionArea->property("pressed").toBool());
+        QTest::qWait(holdInterval + 500);
+        const bool stillPressedAfterHold = interactionArea->property("pressed").toBool();
+        const bool editingDuringHold = root->property("isEditing").toBool();
+        const int editingChangesDuringHold = editingChanged.count();
+        QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, holdPosition);
+
+        QVERIFY(stillPressedAfterHold);
+        QVERIFY(editingDuringHold);
+        QCOMPARE(editingChangesDuringHold, 1);
+        QCOMPARE(editingChanged.count(), 1);
         QCOMPARE(root->property("isEditing").toBool(), true);
         QCOMPARE(detailLoader->property("active").toBool(), false);
+        QCOMPARE(modelChanged.count(), 0);
+        QCoreApplication::processEvents();
+        QCOMPARE(root->property("isEditing").toBool(), true);
+        QCOMPARE(editingChanged.count(), 1);
         QVERIFY(config.open(QIODevice::ReadOnly));
-        QCOMPARE(config.readAll(), configBeforeClick);
+        QCOMPARE(config.readAll(), configBeforeHold);
         QCOMPARE(qmlWarnings.count(), 0);
     }
 
@@ -375,6 +424,8 @@ private slots:
         ModelFixture fixture({
             {"cpu", "Cpu", 0, {}},
         });
+        QVERIFY2(fixture.isReady(), qPrintable(fixture.error()));
+        QCOMPARE(fixture.model->rowCount(), 1);
         QQmlEngine engine;
         QSignalSpy qmlWarnings(&engine, &QQmlEngine::warnings);
         QQmlComponent editingWindowComponent(&engine);
@@ -393,7 +444,7 @@ private slots:
             QRectF(editingWindow->screen()->availableGeometry()));
 
         auto* const viewModel = fixture.model
-                                    .data(fixture.model.index(0), UI::WidgetModel::ViewModelRole)
+                                    ->data(fixture.model->index(0), UI::WidgetModel::ViewModelRole)
                                     .value<Widgets::WidgetViewModel*>();
         QVERIFY(viewModel != nullptr);
         QQmlComponent popupComponent(
@@ -445,6 +496,8 @@ private slots:
             {"clock", "Clock", 0, {}},
             {"cpu", "Cpu", 3, {}},
         });
+        QVERIFY2(fixture.isReady(), qPrintable(fixture.error()));
+        QCOMPARE(fixture.model->rowCount(), 2);
         QQmlEngine engine;
         QSignalSpy qmlWarnings(&engine, &QQmlEngine::warnings);
         QQmlComponent editingWindowComponent(&engine);
@@ -460,16 +513,16 @@ private slots:
         QVERIFY(firstWindow != nullptr);
         QVERIFY(secondWindow != nullptr);
 
-        const auto clockIndex = fixture.model.index(0);
-        const auto cpuIndex = fixture.model.index(1);
-        const QUrl clockUrl = fixture.model.data(
+        const auto clockIndex = fixture.model->index(0);
+        const auto cpuIndex = fixture.model->index(1);
+        const QUrl clockUrl = fixture.model->data(
             clockIndex, UI::WidgetModel::QmlUrlRole).toUrl();
-        const QUrl cpuUrl = fixture.model.data(cpuIndex, UI::WidgetModel::QmlUrlRole).toUrl();
+        const QUrl cpuUrl = fixture.model->data(cpuIndex, UI::WidgetModel::QmlUrlRole).toUrl();
         auto* const clockViewModel = fixture.model
-                                         .data(clockIndex, UI::WidgetModel::ViewModelRole)
+                                         ->data(clockIndex, UI::WidgetModel::ViewModelRole)
                                          .value<Widgets::WidgetViewModel*>();
         auto* const cpuViewModel = fixture.model
-                                       .data(cpuIndex, UI::WidgetModel::ViewModelRole)
+                                       ->data(cpuIndex, UI::WidgetModel::ViewModelRole)
                                        .value<Widgets::WidgetViewModel*>();
         QVERIFY(clockViewModel != nullptr);
         QVERIFY(cpuViewModel != nullptr);
@@ -533,10 +586,12 @@ private slots:
         ModelFixture fixture({
             {"cpu", "Cpu", 0, {}},
         });
+        QVERIFY2(fixture.isReady(), qPrintable(fixture.error()));
+        QCOMPARE(fixture.model->rowCount(), 1);
         QQmlApplicationEngine engine;
         QSignalSpy qmlWarnings(&engine, &QQmlEngine::warnings);
         engine.setInitialProperties({
-            {QStringLiteral("widgetModel"), QVariant::fromValue(&fixture.model)},
+            {QStringLiteral("widgetModel"), QVariant::fromValue(fixture.model.get())},
         });
         engine.loadFromModule(QStringLiteral("StatusBar"), QStringLiteral("Main"));
 

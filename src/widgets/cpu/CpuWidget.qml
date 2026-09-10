@@ -140,15 +140,39 @@ Item {
 
     MouseArea {
         id: mouseArea
+        objectName: "cpuInteractionArea"
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: widgetRoot.editing ? Qt.ArrowCursor : Qt.PointingHandCursor
+        property point pressPosition: Qt.point(0, 0)
 
-        onPressed: {
+        onPressed: function(mouse) {
             widgetRoot.forceActiveFocus(Qt.MouseFocusReason)
             widgetRoot.longPressHandled = false
+            pressPosition = Qt.point(mouse.x, mouse.y)
+            holdTimer.restart()
         }
-        onPressAndHold: widgetRoot.handleLongPress()
+        onPositionChanged: function(mouse) {
+            const deltaX = mouse.x - pressPosition.x
+            const deltaY = mouse.y - pressPosition.y
+            const dragDistance = mouseArea.drag.threshold
+            if ((deltaX * deltaX) + (deltaY * deltaY)
+                    > dragDistance * dragDistance) {
+                holdTimer.stop()
+            }
+        }
+        onCanceled: holdTimer.stop()
+        onReleased: holdTimer.stop()
         onClicked: widgetRoot.handleClick()
+
+        Timer {
+            id: holdTimer
+            interval: mouseArea.pressAndHoldInterval
+            repeat: false
+            onTriggered: {
+                if (mouseArea.pressed)
+                    widgetRoot.handleLongPress()
+            }
+        }
     }
 }

@@ -83,7 +83,9 @@ public:
 Widgets::WidgetRegistry builtInRegistry()
 {
     auto result = Widgets::registerAllWidgets();
-    Q_ASSERT(result.hasValue());
+    if (!result.hasValue()) {
+        qFatal("Could not create built-in widget registry: %s", qPrintable(result.error()));
+    }
     return std::move(result).value();
 }
 
