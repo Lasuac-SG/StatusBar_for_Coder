@@ -17,6 +17,26 @@ Item {
     readonly property CpuDetailPopup detailPopup:
         detailLoader.item as CpuDetailPopup
 
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Button
+    Accessible.name: "CPU details"
+    Accessible.checkable: true
+    Accessible.checked: detailPopup !== null && detailPopup.visible
+    Accessible.onPressAction: toggleDetails()
+
+    Keys.onReturnPressed: function(event) {
+        toggleDetails()
+        event.accepted = true
+    }
+    Keys.onEnterPressed: function(event) {
+        toggleDetails()
+        event.accepted = true
+    }
+    Keys.onSpacePressed: function(event) {
+        toggleDetails()
+        event.accepted = true
+    }
+
     function closeDetails() {
         if (detailPopup && detailPopup.visible)
             detailPopup.dismiss()
@@ -40,6 +60,18 @@ Item {
             closeDetails()
         else
             openDetails()
+    }
+
+    function handleLongPress() {
+        longPressHandled = true
+        closeDetails()
+        if (requestEditing)
+            requestEditing()
+    }
+
+    function handleClick() {
+        if (!longPressHandled)
+            toggleDetails()
     }
 
     onEditingChanged: {
@@ -112,16 +144,11 @@ Item {
         hoverEnabled: true
         cursorShape: widgetRoot.editing ? Qt.ArrowCursor : Qt.PointingHandCursor
 
-        onPressed: widgetRoot.longPressHandled = false
-        onPressAndHold: {
-            widgetRoot.longPressHandled = true
-            widgetRoot.closeDetails()
-            if (widgetRoot.requestEditing)
-                widgetRoot.requestEditing()
+        onPressed: {
+            widgetRoot.forceActiveFocus(Qt.MouseFocusReason)
+            widgetRoot.longPressHandled = false
         }
-        onClicked: {
-            if (!widgetRoot.longPressHandled)
-                widgetRoot.toggleDetails()
-        }
+        onPressAndHold: widgetRoot.handleLongPress()
+        onClicked: widgetRoot.handleClick()
     }
 }

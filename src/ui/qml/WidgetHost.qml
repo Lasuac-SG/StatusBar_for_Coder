@@ -12,9 +12,20 @@ Item {
     signal editingRequested()
 
     property bool componentComplete: false
+    property bool updateScheduled: false
     property url loadedQmlUrl
     property WidgetViewModel loadedViewModel: null
     property Window loadedEditingWindow: null
+
+    function scheduleUpdate() {
+        if (!componentComplete || updateScheduled)
+            return
+        updateScheduled = true
+        Qt.callLater(function() {
+            updateScheduled = false
+            updateSource()
+        })
+    }
 
     function updateSource() {
         if (!componentComplete)
@@ -50,12 +61,12 @@ Item {
         })
     }
 
-    onQmlUrlChanged: updateSource()
-    onViewModelChanged: updateSource()
-    onEditingWindowChanged: updateSource()
+    onQmlUrlChanged: scheduleUpdate()
+    onViewModelChanged: scheduleUpdate()
+    onEditingWindowChanged: scheduleUpdate()
     Component.onCompleted: {
         componentComplete = true
-        updateSource()
+        scheduleUpdate()
     }
 
     Loader {

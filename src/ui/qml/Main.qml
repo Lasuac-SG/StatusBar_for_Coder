@@ -18,6 +18,10 @@ Window {
     readonly property real unitWidth: cellWidth + spacing
     readonly property real barRadius: Math.round(barHeight * Theme.barRadiusRatio)
 
+    function enterEditing() {
+        isEditing = true
+    }
+
     x: 0
     y: 0
     width: Screen.width
@@ -49,7 +53,7 @@ Window {
         border.width: root.isEditing ? Theme.editingBorderWidth : 0
 
         TapHandler {
-            onLongPressed: root.isEditing = !root.isEditing
+            onLongPressed: root.enterEditing()
         }
 
         Item {
@@ -125,7 +129,7 @@ Window {
                         viewModel: widgetContainer.viewModel
                         editingWindow: root
                         editing: root.isEditing
-                        onEditingRequested: root.isEditing = true
+                        onEditingRequested: root.enterEditing()
                     }
 
                     MouseArea {

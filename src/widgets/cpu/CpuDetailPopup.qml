@@ -22,13 +22,35 @@ Window {
             dismiss()
     }
 
+    function clampedPosition(globalCenterX, globalY, availableGeometry) {
+        const availableX = availableGeometry.x
+        const availableY = availableGeometry.y
+        const horizontalRoom = Math.max(0, availableGeometry.width - width)
+        const verticalRoom = Math.max(0, availableGeometry.height - height)
+        const horizontalMargin = Math.min(Theme.spacingLarge, horizontalRoom / 2)
+        const verticalMargin = Math.min(Theme.spacingLarge, verticalRoom / 2)
+        const minimumX = availableX + horizontalMargin
+        const maximumX = availableX + horizontalRoom - horizontalMargin
+        const minimumY = availableY + verticalMargin
+        const maximumY = availableY + verticalRoom - verticalMargin
+        return Qt.point(
+            Math.max(minimumX, Math.min(globalCenterX - (width / 2), maximumX)),
+            Math.max(minimumY, Math.min(globalY, maximumY)))
+    }
+
     function openAt(globalCenterX, globalY) {
         closeAnimation.stop()
-        const targetX = globalCenterX - (width / 2)
-        x = Math.max(
-            Theme.spacingLarge,
-            Math.min(targetX, Screen.width - width - Theme.spacingLarge))
-        y = globalY
+        const availableGeometry = WindowGeometry.availableGeometry(editingWindow)
+        if (availableGeometry
+                && availableGeometry.width > 0
+                && availableGeometry.height > 0) {
+            const position = clampedPosition(globalCenterX, globalY, availableGeometry)
+            x = position.x
+            y = position.y
+        } else {
+            x = globalCenterX - (width / 2)
+            y = globalY
+        }
         popupCard.opacity = 0
         popupCard.scale = 0.95
         visible = true
@@ -102,13 +124,38 @@ Window {
 
                 Rectangle {
                     id: pinButton
+                    objectName: "cpuPinButton"
                     width: 26
                     height: 26
                     radius: Theme.radiusControl
                     anchors.verticalCenter: parent.verticalCenter
+                    activeFocusOnTab: true
                     color: popupWindow.isPinned
                         ? Theme.accentStrong
                         : (pinMouse.containsMouse ? Theme.border : "transparent")
+
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "Pin CPU details"
+                    Accessible.checkable: true
+                    Accessible.checked: popupWindow.isPinned
+                    Accessible.onPressAction: togglePinned()
+
+                    function togglePinned() {
+                        popupWindow.isPinned = !popupWindow.isPinned
+                    }
+
+                    Keys.onReturnPressed: function(event) {
+                        togglePinned()
+                        event.accepted = true
+                    }
+                    Keys.onEnterPressed: function(event) {
+                        togglePinned()
+                        event.accepted = true
+                    }
+                    Keys.onSpacePressed: function(event) {
+                        togglePinned()
+                        event.accepted = true
+                    }
 
                     Text {
                         anchors.centerIn: parent
@@ -123,7 +170,8 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: popupWindow.isPinned = !popupWindow.isPinned
+                        onPressed: pinButton.forceActiveFocus(Qt.MouseFocusReason)
+                        onClicked: pinButton.togglePinned()
                     }
                 }
             }

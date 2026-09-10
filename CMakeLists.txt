@@ -69,11 +69,16 @@ set_source_files_properties(src/widgets/cpu/CpuDetailPopup.qml PROPERTIES
     QT_RESOURCE_ALIAS CpuDetailPopup.qml)
 set_source_files_properties(src/widgets/cpu/cpu.svg PROPERTIES QT_RESOURCE_ALIAS cpu.svg)
 
-qt_add_qml_module(StatusBar_for_Coder
+qt_add_library(StatusBarQml STATIC)
+qt_add_qml_module(StatusBarQml
     URI StatusBar
     VERSION 1.0
+    RESOURCE_PREFIX "/qt/qml"
+    OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/StatusBar"
     SOURCES
         src/ui/qml_types.h
+        src/ui/window_geometry.h
+        src/ui/window_geometry.cpp
     QML_FILES
         src/ui/qml/Main.qml
         src/ui/qml/Theme.qml
@@ -85,16 +90,21 @@ qt_add_qml_module(StatusBar_for_Coder
     RESOURCES
         src/widgets/cpu/cpu.svg
 )
-target_include_directories(StatusBar_for_Coder PRIVATE
+target_include_directories(StatusBarQml PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui)
-target_link_libraries(StatusBar_for_Coder PRIVATE
+target_link_libraries(StatusBarQml PUBLIC
     statusbar_core Qt6::Gui Qt6::Qml Qt6::Quick)
+target_link_libraries(StatusBar_for_Coder PRIVATE
+    statusbar_core StatusBarQml
+    Qt6::Gui Qt6::Qml Qt6::Quick)
 
 if(MSVC)
     target_compile_options(statusbar_core PRIVATE /W4 /permissive-)
+    target_compile_options(StatusBarQml PRIVATE /W4 /permissive-)
     target_compile_options(StatusBar_for_Coder PRIVATE /W4 /permissive-)
 else()
     target_compile_options(statusbar_core PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(StatusBarQml PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(StatusBar_for_Coder PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
