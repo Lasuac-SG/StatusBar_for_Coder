@@ -47,6 +47,55 @@ QString errorText(const QQmlComponent& component)
     return messages.join(QLatin1Char('\n'));
 }
 
+class ScopedQtWarnings final {
+public:
+    ScopedQtWarnings()
+    {
+        Q_ASSERT(active_ == nullptr);
+        active_ = this;
+        previousHandler_ = qInstallMessageHandler(&ScopedQtWarnings::handleMessage);
+    }
+
+    ~ScopedQtWarnings()
+    {
+        qInstallMessageHandler(previousHandler_);
+        active_ = nullptr;
+    }
+
+    Q_DISABLE_COPY_MOVE(ScopedQtWarnings)
+
+    void clear() { messages_.clear(); }
+    [[nodiscard]] const QStringList& messages() const { return messages_; }
+
+private:
+    static void handleMessage(
+        QtMsgType type, const QMessageLogContext& context, const QString& message)
+    {
+        if (active_ != nullptr && type == QtWarningMsg) {
+            active_->messages_.append(message);
+        }
+        if (active_ != nullptr && active_->previousHandler_ != nullptr) {
+            active_->previousHandler_(type, context, message);
+        }
+    }
+
+    inline static ScopedQtWarnings* active_ = nullptr;
+    QtMessageHandler previousHandler_ = nullptr;
+    QStringList messages_;
+};
+
+std::unique_ptr<QObject> createWidgetObject(
+    QQmlComponent& component,
+    Widgets::WidgetViewModel* viewModel,
+    QQuickWindow* editingWindow)
+{
+    return std::unique_ptr<QObject>(component.createWithInitialProperties({
+        {QStringLiteral("viewModel"), QVariant::fromValue(viewModel)},
+        {QStringLiteral("editingWindow"), QVariant::fromValue(editingWindow)},
+        {QStringLiteral("editing"), false},
+    }));
+}
+
 void registerQmlTypesForTest()
 {
     qmlRegisterUncreatableType<UI::WidgetModel>(
@@ -166,9 +215,20 @@ private slots:
         });
         QQmlEngine engine;
         engine.addImportPath(QString::fromUtf8(STATUSBAR_QML_IMPORT_PATH));
-        QQuickWindow editingWindow;
+        ScopedQtWarnings warnings;
+        QQmlComponent editingWindowComponent(&engine);
+        editingWindowComponent.setData(
+            QByteArrayLiteral("import QtQuick.Window\nWindow { visible: false }"),
+            QUrl());
+        QVERIFY2(
+            editingWindowComponent.status() == QQmlComponent::Ready,
+            qPrintable(errorText(editingWindowComponent)));
+        std::unique_ptr<QQuickWindow> editingWindow(
+            qobject_cast<QQuickWindow*>(editingWindowComponent.create()));
+        QVERIFY2(editingWindow != nullptr, qPrintable(errorText(editingWindowComponent)));
 
         for (int row = 0; row < fixture.model.rowCount(); ++row) {
+            warnings.clear();
             const auto index = fixture.model.index(row);
             const QUrl qmlUrl = fixture.model.data(index, UI::WidgetModel::QmlUrlRole).toUrl();
             auto* const viewModel = fixture.model
@@ -177,16 +237,17 @@ private slots:
             QVERIFY(viewModel != nullptr);
             QQmlComponent component(&engine, qmlUrl);
             QVERIFY2(component.status() == QQmlComponent::Ready, qPrintable(errorText(component)));
-            std::unique_ptr<QObject> object(component.createWithInitialProperties({
-                {QStringLiteral("viewModel"), QVariant::fromValue(viewModel)},
-                {QStringLiteral("editingWindow"),
-                 QVariant::fromValue(static_cast<QObject*>(&editingWindow))},
-                {QStringLiteral("editing"), false},
-            }));
+            auto object = createWidgetObject(component, viewModel, editingWindow.get());
             QVERIFY2(object != nullptr, qPrintable(errorText(component)));
+            QVERIFY2(
+                warnings.messages().isEmpty(),
+                qPrintable(warnings.messages().join(QLatin1Char('\n'))));
             QCOMPARE(
                 object->property("viewModel").value<Widgets::WidgetViewModel*>(),
                 viewModel);
+            QCOMPARE(
+                object->property("editingWindow").value<QQuickWindow*>(),
+                editingWindow.get());
 
             if (qmlUrl.fileName() == QStringLiteral("CpuWidget.qml")) {
                 QObject* const detailLoader = object->findChild<QObject*>(
@@ -194,7 +255,78 @@ private slots:
                 QVERIFY(detailLoader != nullptr);
                 QVERIFY(!detailLoader->property("active").toBool());
                 QVERIFY(object->findChild<QObject*>(QStringLiteral("cpuDetailPopup")) == nullptr);
+
+                warnings.clear();
+                QVERIFY(detailLoader->setProperty("active", true));
+                QObject* const detailPopup = detailLoader->property("item").value<QObject*>();
+                QVERIFY(detailPopup != nullptr);
+                QCOMPARE(
+                    detailPopup->property("viewModel").value<Widgets::WidgetViewModel*>(),
+                    viewModel);
+                QCOMPARE(
+                    detailPopup->property("editingWindow").value<QQuickWindow*>(),
+                    editingWindow.get());
+                QVERIFY2(
+                    warnings.messages().isEmpty(),
+                    qPrintable(warnings.messages().join(QLatin1Char('\n'))));
             }
+        }
+    }
+
+    void widgetHostPreservesTypedInitialProperties()
+    {
+        ModelFixture fixture({
+            {"clock", "Clock", 0, {}},
+            {"cpu", "Cpu", 3, {}},
+        });
+        QQmlEngine engine;
+        engine.addImportPath(QString::fromUtf8(STATUSBAR_QML_IMPORT_PATH));
+        ScopedQtWarnings warnings;
+        QQmlComponent editingWindowComponent(&engine);
+        editingWindowComponent.setData(
+            QByteArrayLiteral("import QtQuick.Window\nWindow { visible: false }"), QUrl());
+        QVERIFY2(
+            editingWindowComponent.status() == QQmlComponent::Ready,
+            qPrintable(errorText(editingWindowComponent)));
+        std::unique_ptr<QQuickWindow> editingWindow(
+            qobject_cast<QQuickWindow*>(editingWindowComponent.create()));
+        QVERIFY2(editingWindow != nullptr, qPrintable(errorText(editingWindowComponent)));
+
+        QQmlComponent hostComponent(
+            &engine, QUrl(QStringLiteral("qrc:/qt/qml/StatusBar/WidgetHost.qml")));
+        QVERIFY2(
+            hostComponent.status() == QQmlComponent::Ready,
+            qPrintable(errorText(hostComponent)));
+
+        for (int row = 0; row < fixture.model.rowCount(); ++row) {
+            warnings.clear();
+            const auto index = fixture.model.index(row);
+            const QUrl qmlUrl = fixture.model.data(index, UI::WidgetModel::QmlUrlRole).toUrl();
+            auto* const viewModel = fixture.model
+                                        .data(index, UI::WidgetModel::ViewModelRole)
+                                        .value<Widgets::WidgetViewModel*>();
+            QVERIFY(viewModel != nullptr);
+            std::unique_ptr<QObject> host(hostComponent.createWithInitialProperties({
+                {QStringLiteral("qmlUrl"), QVariant::fromValue(qmlUrl)},
+                {QStringLiteral("viewModel"), QVariant::fromValue(viewModel)},
+                {QStringLiteral("editingWindow"), QVariant::fromValue(editingWindow.get())},
+                {QStringLiteral("editing"), false},
+            }));
+            QVERIFY2(host != nullptr, qPrintable(errorText(hostComponent)));
+
+            QObject* const loader = host->findChild<QObject*>(QStringLiteral("widgetLoader"));
+            QVERIFY(loader != nullptr);
+            QObject* const widget = loader->property("item").value<QObject*>();
+            QVERIFY(widget != nullptr);
+            QCOMPARE(
+                widget->property("viewModel").value<Widgets::WidgetViewModel*>(),
+                viewModel);
+            QCOMPARE(
+                widget->property("editingWindow").value<QQuickWindow*>(),
+                editingWindow.get());
+            QVERIFY2(
+                warnings.messages().isEmpty(),
+                qPrintable(warnings.messages().join(QLatin1Char('\n'))));
         }
     }
 };
