@@ -1,20 +1,21 @@
 import QtQuick
-import Theme 1.0
+import QtQuick.Window
+import StatusBar
 
 Item {
     id: root
-    anchors.fill: parent
-    property var viewModel
+
+    required property ClockViewModel viewModel
+    property Window editingWindow: null
+    property bool editing: false
+    property var requestEditing: null
 
     Text {
         anchors.centerIn: parent
         text: root.viewModel ? root.viewModel.timeText : "--:--"
-        color: "#f0f0f0"
+        color: Theme.foreground
         font.family: Theme.fontFamily
         font.pixelSize: Theme.fontSm
         font.weight: Theme.weightLight
-        renderType: Text.NativeRendering
     }
 }
-
-

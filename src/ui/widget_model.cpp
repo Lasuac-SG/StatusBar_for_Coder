@@ -44,7 +44,7 @@ QVariant WidgetModel::data(const QModelIndex& modelIndex, const int role) const
     case QmlUrlRole:
         return instance.qmlUrl;
     case ViewModelRole:
-        return QVariant::fromValue(static_cast<QObject*>(instance.viewModel.get()));
+        return QVariant::fromValue(instance.viewModel.get());
     default:
         return {};
     }

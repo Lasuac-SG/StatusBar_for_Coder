@@ -6,6 +6,8 @@
 namespace Widgets {
 
 class WidgetViewModel : public QObject {
+    Q_OBJECT
+
 public:
     explicit WidgetViewModel(QObject* parent = nullptr)
         : QObject(parent)

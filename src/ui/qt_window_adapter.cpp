@@ -1,13 +1,10 @@
 #include "ui/qt_window_adapter.h"
-#include "core/window_manager.h"
 #include "widgets/registry_setup.h"
 #include <QCoreApplication>
 #include <QDir>
-#include <QQmlContext>
+#include <QQuickWindow>
 #include <QStandardPaths>
-#include <QtQml>
 #include <QFont>
-#include <iostream>
 #include <stdexcept>
 
 namespace UI {
@@ -17,9 +14,6 @@ namespace UI {
         QFont defaultFont("Segoe UI");
         defaultFont.setStyleStrategy(QFont::PreferAntialias);
         m_app->setFont(defaultFont);
-
-        // 注册全局 Theme 1.0 单例
-        qmlRegisterSingletonType(QUrl(QStringLiteral("qrc:/src/ui/qml/Theme.qml")), "Theme", 1, 0, "Theme");
 
         m_engine = std::make_unique<QQmlApplicationEngine>();
 
@@ -51,22 +45,18 @@ namespace UI {
                     .arg(configPath, configResult.error())
                     .toStdString());
         }
-        m_engine->rootContext()->setContextProperty("reservedBarHeight", static_cast<int>(Core::WindowManager::LOGICAL_BAR_HEIGHT));
-        m_engine->rootContext()->setContextProperty("widgetModel", m_widgetModel.get());
-
-        QObject::connect(m_engine.get(), &QQmlApplicationEngine::objectCreated,
-                         m_app.get(), [](QObject *obj, const QUrl &objUrl) {
-            if (!obj) {
-                std::cerr << "[Fatal Error] 无法加载 QML 视图: " 
-                          << objUrl.toString().toStdString() << std::endl;
-            }
-        }, Qt::DirectConnection);
-
-        const QUrl url(QStringLiteral("qrc:/src/ui/qml/main.qml"));
-        m_engine->load(url);
+        m_engine->setInitialProperties({
+            {QStringLiteral("widgetModel"), QVariant::fromValue(m_widgetModel.get())},
+        });
+        m_engine->loadFromModule(QStringLiteral("StatusBar"), QStringLiteral("Main"));
+        if (m_engine->rootObjects().isEmpty()
+            || qobject_cast<QQuickWindow*>(m_engine->rootObjects().constFirst()) == nullptr) {
+            throw std::runtime_error("Failed to load StatusBar.Main");
+        }
     }
 
     void QtWindowAdapter::Run() {
+        qobject_cast<QQuickWindow*>(m_engine->rootObjects().constFirst())->show();
         m_app->exec();
     }
 

@@ -30,11 +30,45 @@ qt_add_executable(widget_model_test widget_model_test.cpp)
 target_link_libraries(widget_model_test PRIVATE statusbar_core Qt6::Test)
 add_test(NAME widget_model_test COMMAND widget_model_test)
 
-qt_add_executable(resource_embedding_test
-    resource_embedding_test.cpp
-    ${PROJECT_SOURCE_DIR}/resources.qrc
+qt_add_executable(resource_embedding_test resource_embedding_test.cpp)
+set_source_files_properties(
+    ${PROJECT_SOURCE_DIR}/src/ui/qml/Main.qml
+    PROPERTIES QT_RESOURCE_ALIAS Main.qml)
+set_source_files_properties(
+    ${PROJECT_SOURCE_DIR}/src/ui/qml/Theme.qml
+    PROPERTIES QT_RESOURCE_ALIAS Theme.qml)
+set_source_files_properties(
+    ${PROJECT_SOURCE_DIR}/src/ui/qml/WidgetHost.qml
+    PROPERTIES QT_RESOURCE_ALIAS WidgetHost.qml)
+set_source_files_properties(
+    ${PROJECT_SOURCE_DIR}/src/ui/qml/MetricCard.qml
+    PROPERTIES QT_RESOURCE_ALIAS MetricCard.qml)
+set_source_files_properties(
+    ${PROJECT_SOURCE_DIR}/src/widgets/clock/ClockWidget.qml
+    PROPERTIES QT_RESOURCE_ALIAS ClockWidget.qml)
+set_source_files_properties(
+    ${PROJECT_SOURCE_DIR}/src/widgets/cpu/CpuWidget.qml
+    PROPERTIES QT_RESOURCE_ALIAS CpuWidget.qml)
+set_source_files_properties(
+    ${PROJECT_SOURCE_DIR}/src/widgets/cpu/CpuDetailPopup.qml
+    PROPERTIES QT_RESOURCE_ALIAS CpuDetailPopup.qml)
+set_source_files_properties(
+    ${PROJECT_SOURCE_DIR}/src/widgets/cpu/cpu.svg
+    PROPERTIES QT_RESOURCE_ALIAS cpu.svg)
+qt_add_resources(resource_embedding_test module_test_resources
+    PREFIX "/qt/qml/StatusBar"
+    FILES
+        ${PROJECT_SOURCE_DIR}/src/ui/qml/Main.qml
+        ${PROJECT_SOURCE_DIR}/src/ui/qml/Theme.qml
+        ${PROJECT_SOURCE_DIR}/src/ui/qml/WidgetHost.qml
+        ${PROJECT_SOURCE_DIR}/src/ui/qml/MetricCard.qml
+        ${PROJECT_SOURCE_DIR}/src/widgets/clock/ClockWidget.qml
+        ${PROJECT_SOURCE_DIR}/src/widgets/cpu/CpuWidget.qml
+        ${PROJECT_SOURCE_DIR}/src/widgets/cpu/CpuDetailPopup.qml
+        ${PROJECT_SOURCE_DIR}/src/widgets/cpu/cpu.svg
 )
-set_target_properties(resource_embedding_test PROPERTIES AUTORCC ON)
+target_compile_definitions(resource_embedding_test PRIVATE
+    STATUSBAR_QML_IMPORT_PATH="${PROJECT_BINARY_DIR}")
 target_link_libraries(resource_embedding_test PRIVATE
     statusbar_core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test)
 add_test(NAME resource_embedding_test COMMAND resource_embedding_test)

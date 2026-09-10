@@ -1,89 +1,127 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Window
-import Theme 1.0
+import StatusBar
 
 Item {
     id: widgetRoot
-    anchors.fill: parent
-    property var viewModel
 
-    readonly property bool inEditing: Window.window ? Window.window.isEditing : false
+    required property CpuViewModel viewModel
+    required property Window editingWindow
+    required property bool editing
+    property var requestEditing: null
 
-    onInEditingChanged: {
-        if (inEditing && detailPopup.visible) {
-            detailPopup.close()
+    property bool pendingDetailOpen: false
+    property bool longPressHandled: false
+    readonly property CpuDetailPopup detailPopup:
+        detailLoader.item as CpuDetailPopup
+
+    function closeDetails() {
+        if (detailPopup && detailPopup.visible)
+            detailPopup.dismiss()
+    }
+
+    function openDetails() {
+        if (!detailPopup) {
+            pendingDetailOpen = true
+            detailLoader.active = true
+            return
         }
+
+        const globalPoint = widgetRoot.mapToGlobal(widgetRoot.width / 2, widgetRoot.height)
+        detailPopup.openAt(globalPoint.x, globalPoint.y + Theme.spacingSmall)
+    }
+
+    function toggleDetails() {
+        if (editing)
+            return
+        if (detailPopup && detailPopup.visible)
+            closeDetails()
+        else
+            openDetails()
+    }
+
+    onEditingChanged: {
+        if (editing)
+            closeDetails()
     }
 
     Rectangle {
-        id: hoverBg
         anchors.fill: parent
-        radius: Math.max(2, Math.round(widgetRoot.height * 0.15))
-        color: mouseArea.containsMouse && !widgetRoot.inEditing ? "#14ffffff" : "transparent"
-        
+        radius: Math.max(Theme.spacingTiny, Math.round(widgetRoot.height * 0.15))
+        color: mouseArea.containsMouse && !widgetRoot.editing
+            ? Theme.hoverBackground
+            : "transparent"
+
         Behavior on color {
-            ColorAnimation { duration: 150 }
+            ColorAnimation {
+                duration: Theme.hoverAnimationDuration
+            }
         }
     }
 
     Row {
         anchors.centerIn: parent
-        spacing: Math.max(4, Math.round(widgetRoot.height * 0.14))
+        spacing: Math.max(Theme.spacingSmall, Math.round(widgetRoot.height * 0.14))
 
         Image {
-            id: cpuIcon
             width: Math.max(13, Math.round(widgetRoot.height * 0.42))
             height: width
             anchors.verticalCenter: parent.verticalCenter
-            source: "qrc:/src/widgets/cpu/cpu.svg"
-            sourceSize: Qt.size(width * 2, height * 2)
+            source: Qt.resolvedUrl("cpu.svg")
             fillMode: Image.PreserveAspectFit
             smooth: true
-            mipmap: true
             opacity: 0.9
         }
 
         Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: (widgetRoot.viewModel ? widgetRoot.viewModel.cpuPercent : 0) + "%"
-            color: widgetRoot.viewModel && widgetRoot.viewModel.cpuPercent > 85 ? "#ff5555" : "#e6e6e6"
+            text: widgetRoot.viewModel ? widgetRoot.viewModel.cpuPercent + "%" : "0%"
+            color: widgetRoot.viewModel && widgetRoot.viewModel.cpuPercent > 85
+                ? Theme.error
+                : Theme.foreground
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSm
             font.weight: Theme.weightLight
-            renderType: Text.NativeRendering
         }
     }
 
-    CpuDetailPopup {
-        id: detailPopup
-        viewModel: widgetRoot.viewModel
+    Loader {
+        id: detailLoader
+        objectName: "cpuDetailLoader"
+        active: false
+        sourceComponent: Component {
+            CpuDetailPopup {
+                viewModel: widgetRoot.viewModel
+                editingWindow: widgetRoot.editingWindow
+            }
+        }
+
+        onLoaded: {
+            if (widgetRoot.pendingDetailOpen) {
+                widgetRoot.pendingDetailOpen = false
+                widgetRoot.openDetails()
+            }
+        }
     }
 
     MouseArea {
         id: mouseArea
         anchors.fill: parent
         hoverEnabled: true
-        cursorShape: widgetRoot.inEditing ? Qt.ArrowCursor : Qt.PointingHandCursor
+        cursorShape: widgetRoot.editing ? Qt.ArrowCursor : Qt.PointingHandCursor
 
+        onPressed: widgetRoot.longPressHandled = false
         onPressAndHold: {
-            if (detailPopup.visible) {
-                detailPopup.close()
-            }
-            if (Window.window) {
-                Window.window.isEditing = true
-            }
+            widgetRoot.longPressHandled = true
+            widgetRoot.closeDetails()
+            if (widgetRoot.requestEditing)
+                widgetRoot.requestEditing()
         }
-
         onClicked: {
-            if (widgetRoot.inEditing) return
-
-            if (detailPopup.visible) {
-                detailPopup.close()
-            } else {
-                var globalPt = widgetRoot.mapToGlobal(widgetRoot.width / 2, 0)
-                var topBarHeight = Window.window ? Window.window.height : 36
-                detailPopup.open(globalPt.x, topBarHeight + 4)
-            }
+            if (!widgetRoot.longPressHandled)
+                widgetRoot.toggleDetails()
         }
     }
 }
