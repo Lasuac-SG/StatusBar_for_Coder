@@ -99,7 +99,7 @@ Core::Result<Widgets::WidgetRegistry> failingRegistry()
     return Widgets::WidgetRegistry::create(std::move(descriptors));
 }
 
-Core::Result<Widgets::WidgetRegistry> deferredWarningRegistry()
+Core::Result<Widgets::WidgetRegistry> initialWarningRegistry()
 {
     std::vector<Widgets::WidgetDescriptor> descriptors;
     descriptors.push_back({
@@ -112,10 +112,10 @@ Core::Result<Widgets::WidgetRegistry> deferredWarningRegistry()
         },
     });
     descriptors.push_back({
-        QStringLiteral("DeferredWarning"),
+        QStringLiteral("InitialWarning"),
         1,
         QUrl(QStringLiteral(
-            "qrc:/qt/qml/StatusBar/TestWarnings/DeferredWarningWidget.qml")),
+            "qrc:/qt/qml/StatusBar/TestWarnings/InitialWarningWidget.qml")),
         [](const Core::WidgetConfig& config, Widgets::WidgetContext&)
             -> std::unique_ptr<Widgets::WidgetViewModel> {
             return std::make_unique<Widgets::ClockViewModel>(config);
@@ -154,8 +154,8 @@ private slots:
             runLifecycle();
         } else if (scenario_ == QStringLiteral("external_root_destruction")) {
             externalRootDestruction();
-        } else if (scenario_ == QStringLiteral("deferred_widget_failure")) {
-            deferredWidgetFailure();
+        } else if (scenario_ == QStringLiteral("initial_widget_failure")) {
+            initialWidgetFailure();
         } else {
             QFAIL(qPrintable(QStringLiteral("Unknown scenario: %1").arg(scenario_)));
         }
@@ -433,10 +433,17 @@ private:
         const auto showResult = application.show();
         QVERIFY(!showResult.hasValue());
         QCOMPARE(application.run(), EXIT_FAILURE);
+        const auto reinitializeResult = application.initialize();
+        QVERIFY(!reinitializeResult.hasValue());
+        QVERIFY(reinitializeResult.error().contains(QStringLiteral("destroyed")));
+        QVERIFY(application.window() == nullptr);
+        const auto repeatedResult = application.initialize();
+        QVERIFY(!repeatedResult.hasValue());
+        QVERIFY(repeatedResult.error().contains(QStringLiteral("previously failed")));
         application.quit();
     }
 
-    void deferredWidgetFailure()
+    void initialWidgetFailure()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -447,14 +454,14 @@ private:
             {
                 {QStringLiteral("cpu"), QStringLiteral("Cpu"), 0, {}},
                 {
-                    QStringLiteral("deferred"),
-                    QStringLiteral("DeferredWarning"),
+                    QStringLiteral("initial-warning"),
+                    QStringLiteral("InitialWarning"),
                     2,
                     {},
                 },
             });
         QVERIFY2(saveResult.hasValue(), qPrintable(saveResult.error()));
-        auto registryResult = deferredWarningRegistry();
+        auto registryResult = initialWarningRegistry();
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         auto sourceState = std::make_shared<SourceState>();
         ApplicationArguments arguments;
@@ -465,16 +472,21 @@ private:
             std::move(registryResult).value(),
             std::make_unique<FakeCpuDataSource>(sourceState));
 
+        bool unrelatedQueuedEventWasProcessed = false;
+        QTimer::singleShot(0, [&unrelatedQueuedEventWasProcessed] {
+            unrelatedQueuedEventWasProcessed = true;
+        });
         QTest::ignoreMessage(
             QtWarningMsg,
             QRegularExpression(QStringLiteral(
-                ".*ReferenceError: missingDeferredValue is not defined.*")));
+                ".*ReferenceError: missingInitialValue is not defined.*")));
         const auto initializeResult = application.initialize();
 
         QVERIFY(!initializeResult.hasValue());
         QVERIFY(initializeResult.error().contains(
-            QStringLiteral("ReferenceError: missingDeferredValue is not defined")));
+            QStringLiteral("ReferenceError: missingInitialValue is not defined")));
         QVERIFY(application.window() == nullptr);
+        QVERIFY(!unrelatedQueuedEventWasProcessed);
         QCOMPARE(sourceState->timesCalls, 1);
         QCOMPARE(sourceState->ratioCalls, 1);
         QTest::qWait(2100);

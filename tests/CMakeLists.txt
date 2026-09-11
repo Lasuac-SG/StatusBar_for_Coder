@@ -40,8 +40,8 @@ set_tests_properties(resource_embedding_test PROPERTIES
 
 set_source_files_properties(qml/WarningRoot.qml PROPERTIES
     QT_RESOURCE_ALIAS WarningRoot.qml)
-set_source_files_properties(qml/DeferredWarningWidget.qml PROPERTIES
-    QT_RESOURCE_ALIAS DeferredWarningWidget.qml)
+set_source_files_properties(qml/InitialWarningWidget.qml PROPERTIES
+    QT_RESOURCE_ALIAS InitialWarningWidget.qml)
 qt_add_library(QtApplicationWarningQml STATIC)
 qt_add_qml_module(QtApplicationWarningQml
     URI StatusBar.TestWarnings
@@ -51,7 +51,7 @@ qt_add_qml_module(QtApplicationWarningQml
     DEPENDENCIES TARGET StatusBarQml
     QML_FILES
         qml/WarningRoot.qml
-        qml/DeferredWarningWidget.qml)
+        qml/InitialWarningWidget.qml)
 
 qt_add_executable(qt_application_test qt_application_test.cpp)
 target_link_libraries(qt_application_test PRIVATE
@@ -66,7 +66,7 @@ foreach(scenario IN ITEMS
         model_cleanup
         run_lifecycle
         external_root_destruction
-        deferred_widget_failure)
+        initial_widget_failure)
     add_test(
         NAME qt_application_${scenario}
         COMMAND qt_application_test ${scenario})

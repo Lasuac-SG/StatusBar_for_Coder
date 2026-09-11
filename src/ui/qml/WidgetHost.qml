@@ -66,7 +66,7 @@ Item {
     onEditingWindowChanged: scheduleUpdate()
     Component.onCompleted: {
         componentComplete = true
-        scheduleUpdate()
+        updateSource()
     }
 
     Loader {

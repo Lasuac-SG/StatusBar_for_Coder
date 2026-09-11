@@ -212,8 +212,10 @@ Core::Result<void> TrayIcon::ShowContextMenu() const
                 .arg(GetLastError()));
     }
     if (!SetForegroundWindow(m_messageHwnd)) {
-        return Core::Result<void>::failure(
-            QStringLiteral("Cannot activate tray popup menu"));
+        LogWindowsMessage(
+            WindowsLogLevel::Warning,
+            QStringLiteral(
+                "Windows denied foreground activation for the tray popup menu; continuing"));
     }
 
     SetLastError(ERROR_SUCCESS);
@@ -233,21 +235,22 @@ Core::Result<void> TrayIcon::ShowContextMenu() const
 
     const auto closeResult = menu.close();
     if (!closeResult.hasValue()) {
-        return closeResult;
-    }
-    if (command == 0 && trackingError != ERROR_SUCCESS) {
-        return Core::Result<void>::failure(
-            QStringLiteral("Cannot track tray popup menu (Win32 error %1)")
-                .arg(trackingError));
+        LogWindowsMessage(WindowsLogLevel::Error, closeResult.error());
     }
     if (!postedDismissal) {
-        return Core::Result<void>::failure(
+        LogWindowsMessage(
+            WindowsLogLevel::Error,
             QStringLiteral("Cannot finalize tray popup menu (Win32 error %1)")
                 .arg(postError));
     }
 
     if (command == static_cast<int>(quitMenuCommand) && m_quitCallback) {
         m_quitCallback();
+    }
+    if (command == 0 && trackingError != ERROR_SUCCESS) {
+        return Core::Result<void>::failure(
+            QStringLiteral("Cannot track tray popup menu (Win32 error %1)")
+                .arg(trackingError));
     }
     return Core::Result<void>::success();
 }

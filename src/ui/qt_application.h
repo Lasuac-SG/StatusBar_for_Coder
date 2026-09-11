@@ -50,12 +50,12 @@ public:
 private:
     enum class State {
         Uninitialized,
+        Initializing,
         Initialized,
         Failed,
     };
 
     [[nodiscard]] Core::Result<void> failInitialization(QString error);
-    [[nodiscard]] Core::Result<void> awaitInitialQmlReady(QQuickWindow* rootWindow);
     void discardRootObjects() noexcept;
 
     QGuiApplication application_;
