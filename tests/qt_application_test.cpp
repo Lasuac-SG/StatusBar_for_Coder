@@ -24,6 +24,17 @@
 
 namespace {
 
+int applicationConstructionCount{};
+
+bool claimApplicationConstruction() noexcept
+{
+    if (applicationConstructionCount != 0) {
+        return false;
+    }
+    ++applicationConstructionCount;
+    return true;
+}
+
 struct SourceState final {
     int timesCalls{};
     int ratioCalls{};
@@ -101,13 +112,36 @@ Core::Result<Widgets::WidgetRegistry> failingRegistry()
 class QtApplicationTest final : public QObject {
     Q_OBJECT
 
-private slots:
-    void init()
+public:
+    explicit QtApplicationTest(QString scenario)
+        : scenario_(std::move(scenario))
     {
-        QTest::failOnWarning();
     }
 
-    void initializesHiddenTypedRootWithoutContextProperties()
+private slots:
+    void runSelectedScenario()
+    {
+        QTest::failOnWarning();
+
+        if (scenario_ == QStringLiteral("success")) {
+            success();
+        } else if (scenario_ == QStringLiteral("config_failure")) {
+            configFailure();
+        } else if (scenario_ == QStringLiteral("missing_root")) {
+            missingRoot();
+        } else if (scenario_ == QStringLiteral("warning_only")) {
+            warningOnlyFailure();
+        } else if (scenario_ == QStringLiteral("model_cleanup")) {
+            modelCleanup();
+        } else {
+            QFAIL(qPrintable(QStringLiteral("Unknown scenario: %1").arg(scenario_)));
+        }
+
+        QCOMPARE(applicationConstructionCount, 1);
+    }
+
+private:
+    void success()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -121,6 +155,8 @@ private slots:
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         auto sourceState = std::make_shared<SourceState>();
         ApplicationArguments arguments;
+        const bool mayConstruct = claimApplicationConstruction();
+        QVERIFY2(mayConstruct, "A process may construct only one QtApplication");
         UI::QtApplication application(
             arguments.argc,
             arguments.argv.data(),
@@ -163,7 +199,7 @@ private slots:
         QCOMPARE(application.run(), 0);
     }
 
-    void reportsConfigurationFailureAndKeepsLifecycleSafe()
+    void configFailure()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -176,6 +212,8 @@ private slots:
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         auto sourceState = std::make_shared<SourceState>();
         ApplicationArguments arguments;
+        const bool mayConstruct = claimApplicationConstruction();
+        QVERIFY2(mayConstruct, "A process may construct only one QtApplication");
         UI::QtApplication application(
             arguments.argc,
             arguments.argv.data(),
@@ -197,7 +235,7 @@ private slots:
         QCOMPARE(sourceState->timesCalls, 0);
     }
 
-    void reportsInjectedQmlRootFailureWithoutChangingProductionModule()
+    void missingRoot()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -211,6 +249,8 @@ private slots:
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         auto sourceState = std::make_shared<SourceState>();
         ApplicationArguments arguments;
+        const bool mayConstruct = claimApplicationConstruction();
+        QVERIFY2(mayConstruct, "A process may construct only one QtApplication");
         UI::QtApplication application(
             arguments.argc,
             arguments.argv.data(),
@@ -226,7 +266,7 @@ private slots:
         QTest::ignoreMessage(
             QtWarningMsg,
             QRegularExpression(QStringLiteral(
-                ".*No module named \\\"MissingStatusBarTestModule\\\" found")));
+                ".*No module named \"MissingStatusBarTestModule\" found")));
         const auto initializeResult = application.initialize();
 
         QVERIFY(!initializeResult.hasValue());
@@ -244,7 +284,52 @@ private slots:
         QCOMPARE(sourceState->ratioCalls, 1);
     }
 
-    void failedModelStagingReleasesCpuConsumerLease()
+    void warningOnlyFailure()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const Core::ConfigRepository repository(
+            directory.filePath(QStringLiteral("config.json")));
+        const auto saveResult = saveConfiguration(
+            repository,
+            {{QStringLiteral("cpu"), QStringLiteral("Cpu"), 0, {}}});
+        QVERIFY2(saveResult.hasValue(), qPrintable(saveResult.error()));
+        auto registryResult = Widgets::registerAllWidgets();
+        QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
+        auto sourceState = std::make_shared<SourceState>();
+        ApplicationArguments arguments;
+        const bool mayConstruct = claimApplicationConstruction();
+        QVERIFY2(mayConstruct, "A process may construct only one QtApplication");
+        UI::QtApplication application(
+            arguments.argc,
+            arguments.argv.data(),
+            repository,
+            std::move(registryResult).value(),
+            std::make_unique<FakeCpuDataSource>(sourceState),
+            {QStringLiteral("StatusBar.TestWarnings"), QStringLiteral("WarningRoot")});
+
+        QTest::ignoreMessage(
+            QtWarningMsg,
+            QRegularExpression(QStringLiteral(
+                ".*ReferenceError: missingWarningValue is not defined.*")));
+        const auto initializeResult = application.initialize();
+
+        QVERIFY(!initializeResult.hasValue());
+        QVERIFY(initializeResult.error().contains(QStringLiteral("StatusBar.TestWarnings")));
+        QVERIFY(initializeResult.error().contains(QStringLiteral("WarningRoot")));
+        QVERIFY(initializeResult.error().contains(
+            QStringLiteral("ReferenceError: missingWarningValue is not defined")));
+        QVERIFY(!initializeResult.error().contains(
+            QStringLiteral("Object creation failed")));
+        QVERIFY(application.window() == nullptr);
+        QCOMPARE(sourceState->timesCalls, 1);
+        QCOMPARE(sourceState->ratioCalls, 1);
+        QTest::qWait(2100);
+        QCOMPARE(sourceState->timesCalls, 1);
+        QCOMPARE(sourceState->ratioCalls, 1);
+    }
+
+    void modelCleanup()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -261,6 +346,8 @@ private slots:
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         auto sourceState = std::make_shared<SourceState>();
         ApplicationArguments arguments;
+        const bool mayConstruct = claimApplicationConstruction();
+        QVERIFY2(mayConstruct, "A process may construct only one QtApplication");
         UI::QtApplication application(
             arguments.argc,
             arguments.argv.data(),
@@ -278,13 +365,22 @@ private slots:
         QCOMPARE(sourceState->timesCalls, 1);
         QCOMPARE(sourceState->ratioCalls, 1);
     }
+
+    QString scenario_;
 };
 
 int main(int argc, char** argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
-    QtApplicationTest test;
-    return QTest::qExec(&test, argc, argv);
+    if (argc != 2) {
+        qCritical("Usage: qt_application_test <scenario>");
+        return 2;
+    }
+
+    QtApplicationTest test(QString::fromLocal8Bit(argv[1]));
+    int testArgc = 1;
+    std::array<char*, 2> testArgv{argv[0], nullptr};
+    return QTest::qExec(&test, testArgc, testArgv.data());
 }
 
 #include "qt_application_test.moc"

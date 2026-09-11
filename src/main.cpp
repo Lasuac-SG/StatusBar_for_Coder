@@ -25,6 +25,31 @@
 namespace {
 
 constexpr std::uint32_t logicalBarHeight = 40;
+constexpr wchar_t singleInstanceMutexName[] =
+    L"Local\\StatusBarForCoder.StatusBar_for_Coder.SingleInstance";
+
+class ScopedHandle final {
+public:
+    explicit ScopedHandle(HANDLE handle) noexcept
+        : handle_(handle)
+    {
+    }
+
+    ~ScopedHandle()
+    {
+        if (handle_ != nullptr) {
+            CloseHandle(handle_);
+        }
+    }
+
+    ScopedHandle(const ScopedHandle&) = delete;
+    ScopedHandle& operator=(const ScopedHandle&) = delete;
+    ScopedHandle(ScopedHandle&&) = delete;
+    ScopedHandle& operator=(ScopedHandle&&) = delete;
+
+private:
+    HANDLE handle_;
+};
 
 QString executableDirectory(const int argc, char** argv)
 {
@@ -46,6 +71,29 @@ int main(int argc, char** argv)
     try {
         QCoreApplication::setOrganizationName(QStringLiteral("StatusBarForCoder"));
         QCoreApplication::setApplicationName(QStringLiteral("StatusBar_for_Coder"));
+
+        SetLastError(ERROR_SUCCESS);
+        const HANDLE mutexHandle =
+            CreateMutexW(nullptr, FALSE, singleInstanceMutexName);
+        const DWORD mutexStatus = GetLastError();
+        if (mutexHandle == nullptr) {
+            logFatal(
+                QStringLiteral(
+                    "Cannot create the single-instance mutex (Win32 error %1)")
+                    .arg(mutexStatus));
+            return 1;
+        }
+        const ScopedHandle singleInstanceMutex(mutexHandle);
+        if (mutexStatus == ERROR_ALREADY_EXISTS) {
+            return 0;
+        }
+        if (mutexStatus != ERROR_SUCCESS) {
+            logFatal(
+                QStringLiteral(
+                    "Single-instance mutex returned unexpected Win32 status %1")
+                    .arg(mutexStatus));
+            return 1;
+        }
 
         const QString configDirectory =
             QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
