@@ -8,36 +8,70 @@ namespace Platform {
 
     TrayIcon::~TrayIcon() {
         if (m_messageHwnd) {
-            NOTIFYICONDATAA nid = { sizeof(NOTIFYICONDATAA) };
-            nid.hWnd = m_messageHwnd;
-            nid.uID = 1;
-            Shell_NotifyIconA(NIM_DELETE, &nid);
+            if (m_isRegistered) {
+                NOTIFYICONDATAA nid{};
+                nid.cbSize = sizeof(NOTIFYICONDATAA);
+                nid.hWnd = m_messageHwnd;
+                nid.uID = 1;
+                Shell_NotifyIconA(NIM_DELETE, &nid);
+            }
             DestroyWindow(m_messageHwnd);
         }
     }
 
-    void TrayIcon::Initialize() noexcept {
-        WNDCLASSEXA wc = { sizeof(WNDCLASSEXA) };
+    Core::Result<void> TrayIcon::Initialize() {
+        if (m_messageHwnd != nullptr) {
+            return Core::Result<void>::success();
+        }
+
+        WNDCLASSEXA wc{};
+        wc.cbSize = sizeof(WNDCLASSEXA);
         wc.lpfnWndProc = WndProc;
         wc.hInstance = GetModuleHandleA(nullptr);
         wc.lpszClassName = "GeekDashboardTrayMsgWindow";
-        RegisterClassExA(&wc);
+        const ATOM classAtom = RegisterClassExA(&wc);
+        const DWORD classError = classAtom == 0 ? GetLastError() : ERROR_SUCCESS;
+        if (classAtom == 0 && classError != ERROR_CLASS_ALREADY_EXISTS) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot register tray window class (Win32 error %1)")
+                    .arg(classError));
+        }
 
         m_messageHwnd = CreateWindowExA(
             0, "GeekDashboardTrayMsgWindow", nullptr,
             0, 0, 0, 0, 0, 
             HWND_MESSAGE, nullptr, wc.hInstance, this
         );
+        if (m_messageHwnd == nullptr) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot create tray message window (Win32 error %1)")
+                    .arg(GetLastError()));
+        }
 
-        NOTIFYICONDATAA nid = { sizeof(NOTIFYICONDATAA) };
+        NOTIFYICONDATAA nid{};
+        nid.cbSize = sizeof(NOTIFYICONDATAA);
         nid.hWnd = m_messageHwnd;
         nid.uID = 1;
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAY_CALLBACK;
         nid.hIcon = LoadIconA(GetModuleHandleA(nullptr), MAKEINTRESOURCEA(IDI_APP_ICON));
+        if (nid.hIcon == nullptr) {
+            const DWORD error = GetLastError();
+            DestroyWindow(m_messageHwnd);
+            m_messageHwnd = nullptr;
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot load tray icon resource (Win32 error %1)").arg(error));
+        }
         strcpy_s(nid.szTip, "StatusBar"); 
 
-        Shell_NotifyIconA(NIM_ADD, &nid);
+        if (!Shell_NotifyIconA(NIM_ADD, &nid)) {
+            DestroyWindow(m_messageHwnd);
+            m_messageHwnd = nullptr;
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot add the StatusBar notification icon"));
+        }
+        m_isRegistered = true;
+        return Core::Result<void>::success();
     }
 
     void TrayIcon::SetQuitCallback(std::function<void()> callback) noexcept {

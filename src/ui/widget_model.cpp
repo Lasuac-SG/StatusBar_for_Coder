@@ -130,6 +130,18 @@ Core::Result<void> WidgetModel::loadFromConfig()
     return Core::Result<void>::success();
 }
 
+void WidgetModel::clear()
+{
+    beginResetModel();
+    m_instances.clear();
+    m_unavailableConfigs.clear();
+    m_document = {};
+    m_requestedTotalSlots = -1;
+    m_layoutReadyForRequestedSlots = false;
+    endResetModel();
+    setLastError({});
+}
+
 bool WidgetModel::setTotalSlots(const int totalSlots)
 {
     m_requestedTotalSlots = totalSlots;

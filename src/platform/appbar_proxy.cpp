@@ -3,21 +3,49 @@
 
 namespace Platform {
     HWND AppBarProxy::s_proxyHwnd = nullptr;
+    HWND AppBarProxy::s_rootHwnd = nullptr;
     uint32_t AppBarProxy::s_width = 0;
     uint32_t AppBarProxy::s_height = 0;
     bool AppBarProxy::s_isRegistered = false;
     UINT AppBarProxy::s_taskbarRestartMessage = 0;
 
-    void AppBarProxy::Initialize(uint32_t width, uint32_t height) noexcept {
+    Core::Result<void> AppBarProxy::Initialize(
+        HWND rootHwnd,
+        uint32_t width,
+        uint32_t height) {
+        Shutdown();
+        if (rootHwnd == nullptr || !IsWindow(rootHwnd)) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot initialize AppBar: root HWND is invalid"));
+        }
+        if (width == 0 || height == 0) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot initialize AppBar: dimensions must be positive"));
+        }
+
+        s_rootHwnd = rootHwnd;
         s_width = width;
         s_height = height;
         s_taskbarRestartMessage = RegisterWindowMessageA("TaskbarCreated");
+        if (s_taskbarRestartMessage == 0) {
+            s_rootHwnd = nullptr;
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot initialize AppBar: TaskbarCreated message registration failed"));
+        }
 
-        WNDCLASSEXA wc = { sizeof(WNDCLASSEXA) };
+        WNDCLASSEXA wc{};
+        wc.cbSize = sizeof(WNDCLASSEXA);
         wc.lpfnWndProc = WndProc;
         wc.hInstance = GetModuleHandle(nullptr);
         wc.lpszClassName = "GeekDashboardAppBarProxy";
-        RegisterClassExA(&wc);
+        const ATOM classAtom = RegisterClassExA(&wc);
+        const DWORD classError = classAtom == 0 ? GetLastError() : ERROR_SUCCESS;
+        if (classAtom == 0 && classError != ERROR_CLASS_ALREADY_EXISTS) {
+            s_rootHwnd = nullptr;
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot initialize AppBar proxy class (Win32 error %1)")
+                    .arg(classError));
+        }
 
         s_proxyHwnd = CreateWindowExA(
             WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -27,46 +55,116 @@ namespace Platform {
             0, 0, 1, 1, 
             nullptr, nullptr, wc.hInstance, nullptr
         );
+        if (s_proxyHwnd == nullptr) {
+            const DWORD error = GetLastError();
+            s_rootHwnd = nullptr;
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot create AppBar proxy window (Win32 error %1)")
+                    .arg(error));
+        }
 
-        RegisterAppBar();
+        auto result = RegisterAppBar();
+        if (!result.hasValue()) {
+            Shutdown();
+            return result;
+        }
+        return Core::Result<void>::success();
     }
 
-    void AppBarProxy::RegisterAppBar() noexcept {
-        if (!s_proxyHwnd) return;
-        APPBARDATA abd = { sizeof(APPBARDATA), s_proxyHwnd, WM_APPBAR_CALLBACK, ABE_TOP };
+    Core::Result<void> AppBarProxy::RegisterAppBar() {
+        if (s_proxyHwnd == nullptr) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot register AppBar: proxy HWND is missing"));
+        }
+        APPBARDATA abd{};
+        abd.cbSize = sizeof(APPBARDATA);
+        abd.hWnd = s_proxyHwnd;
+        abd.uCallbackMessage = WM_APPBAR_CALLBACK;
+        abd.uEdge = ABE_TOP;
         s_isRegistered = SHAppBarMessage(ABM_NEW, &abd);
-        SetAppBarPos();
+        if (!s_isRegistered) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot register AppBar with the Windows shell (ABM_NEW failed)"));
+        }
+
+        auto result = SetAppBarPos();
+        if (!result.hasValue()) {
+            APPBARDATA removeData{};
+            removeData.cbSize = sizeof(APPBARDATA);
+            removeData.hWnd = s_proxyHwnd;
+            SHAppBarMessage(ABM_REMOVE, &removeData);
+            s_isRegistered = false;
+            return result;
+        }
+        return Core::Result<void>::success();
     }
 
-    void AppBarProxy::SetAppBarPos() noexcept {
-        if (!s_proxyHwnd || !s_isRegistered) return;
-        APPBARDATA abd = { sizeof(APPBARDATA), s_proxyHwnd, 0, ABE_TOP, {0, 0, (LONG)s_width, (LONG)s_height} };
-        SHAppBarMessage(ABM_QUERYPOS, &abd);
+    Core::Result<void> AppBarProxy::SetAppBarPos() {
+        if (s_proxyHwnd == nullptr || s_rootHwnd == nullptr || !s_isRegistered) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot position AppBar: registration is incomplete"));
+        }
+        APPBARDATA abd{};
+        abd.cbSize = sizeof(APPBARDATA);
+        abd.hWnd = s_proxyHwnd;
+        abd.uEdge = ABE_TOP;
+        abd.rc = {
+            0,
+            0,
+            static_cast<LONG>(s_width),
+            static_cast<LONG>(s_height),
+        };
+        if (SHAppBarMessage(ABM_QUERYPOS, &abd) == 0) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot position AppBar: ABM_QUERYPOS failed"));
+        }
         abd.rc.top = 0; 
-        abd.rc.bottom = s_height;
-        SHAppBarMessage(ABM_SETPOS, &abd);
+        abd.rc.bottom = static_cast<LONG>(s_height);
+        if (SHAppBarMessage(ABM_SETPOS, &abd) == 0) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot position AppBar: ABM_SETPOS failed"));
+        }
+        if (!SetWindowPos(
+                s_rootHwnd,
+                nullptr,
+                abd.rc.left,
+                abd.rc.top,
+                abd.rc.right - abd.rc.left,
+                abd.rc.bottom - abd.rc.top,
+                SWP_NOACTIVATE | SWP_NOZORDER)) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot position root AppBar window (Win32 error %1)")
+                    .arg(GetLastError()));
+        }
+        return Core::Result<void>::success();
     }
 
     void AppBarProxy::Shutdown() noexcept {
         if (s_proxyHwnd) {
             if (s_isRegistered) {
-                APPBARDATA abd = { sizeof(APPBARDATA), s_proxyHwnd };
+                APPBARDATA abd{};
+                abd.cbSize = sizeof(APPBARDATA);
+                abd.hWnd = s_proxyHwnd;
                 SHAppBarMessage(ABM_REMOVE, &abd);
                 s_isRegistered = false;
             }
             DestroyWindow(s_proxyHwnd);
             s_proxyHwnd = nullptr;
         }
+        s_rootHwnd = nullptr;
+        s_width = 0;
+        s_height = 0;
+        s_taskbarRestartMessage = 0;
     }
 
     LRESULT CALLBACK AppBarProxy::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         if (uMsg == WM_APPBAR_CALLBACK) {
             if (wParam == ABN_POSCHANGED) {
-                SetAppBarPos();
+                static_cast<void>(SetAppBarPos());
                 return 0;
             }
         } else if (uMsg == s_taskbarRestartMessage) {
-            RegisterAppBar();
+            static_cast<void>(RegisterAppBar());
             return 0;
         }
         return DefWindowProc(hwnd, uMsg, wParam, lParam);

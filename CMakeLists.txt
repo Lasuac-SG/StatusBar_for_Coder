@@ -19,8 +19,6 @@ target_sources(statusbar_core PRIVATE
     src/core/config_repository.cpp
     src/core/layout_engine.h
     src/core/layout_engine.cpp
-    src/core/window_manager.h
-    src/core/window_manager.cpp
     src/platform/appbar_proxy.h
     src/platform/appbar_proxy.cpp
     src/platform/cpu_service.h
@@ -50,8 +48,6 @@ qt_add_executable(StatusBar_for_Coder WIN32)
 target_sources(StatusBar_for_Coder PRIVATE
     src/main.cpp
     src/platform/app_resource.rc
-    src/ui/qt_window_adapter.h
-    src/ui/qt_window_adapter.cpp
 )
 
 set_source_files_properties(src/ui/qml/Theme.qml PROPERTIES
@@ -94,17 +90,29 @@ target_include_directories(StatusBarQml PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui)
 target_link_libraries(StatusBarQml PUBLIC
     statusbar_core Qt6::Gui Qt6::Qml Qt6::Quick)
+
+add_library(statusbar_application STATIC)
+target_sources(statusbar_application PRIVATE
+    src/ui/qt_application.h
+    src/ui/qt_application.cpp
+)
+target_include_directories(statusbar_application PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(statusbar_application PUBLIC
+    statusbar_core Qt6::Gui Qt6::Qml Qt6::Quick)
+
 target_link_libraries(StatusBar_for_Coder PRIVATE
-    statusbar_core StatusBarQml
+    statusbar_application StatusBarQml StatusBarQmlplugin
     Qt6::Gui Qt6::Qml Qt6::Quick)
 
 if(MSVC)
     target_compile_options(statusbar_core PRIVATE /W4 /permissive-)
     target_compile_options(StatusBarQml PRIVATE /W4 /permissive-)
+    target_compile_options(statusbar_application PRIVATE /W4 /permissive-)
     target_compile_options(StatusBar_for_Coder PRIVATE /W4 /permissive-)
 else()
     target_compile_options(statusbar_core PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(StatusBarQml PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(statusbar_application PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(StatusBar_for_Coder PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 

@@ -37,3 +37,11 @@ target_link_libraries(resource_embedding_test PRIVATE
 add_test(NAME resource_embedding_test COMMAND resource_embedding_test)
 set_tests_properties(resource_embedding_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+qt_add_executable(qt_application_test qt_application_test.cpp)
+target_link_libraries(qt_application_test PRIVATE
+    statusbar_application StatusBarQml StatusBarQmlplugin
+    Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test)
+add_test(NAME qt_application_test COMMAND qt_application_test)
+set_tests_properties(qt_application_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

@@ -16,6 +16,8 @@
 
 namespace UI {
 
+class QtApplication;
+
 class WidgetModel final : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
@@ -53,6 +55,10 @@ signals:
     void persistenceError(const QString& message);
 
 private:
+    friend class QtApplication;
+
+    void clear();
+
     struct WidgetInstance final {
         Core::WidgetConfig config;
         int span{};
