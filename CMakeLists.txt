@@ -27,6 +27,8 @@ target_sources(statusbar_core PRIVATE
     src/platform/display.cpp
     src/platform/tray_icon.h
     src/platform/tray_icon.cpp
+    src/platform/windows_logging.h
+    src/platform/windows_logging.cpp
     src/ui/widget_model.h
     src/ui/widget_model.cpp
     src/widgets/widget_view_model.h

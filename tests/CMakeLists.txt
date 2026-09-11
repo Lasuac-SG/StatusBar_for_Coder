@@ -40,13 +40,18 @@ set_tests_properties(resource_embedding_test PROPERTIES
 
 set_source_files_properties(qml/WarningRoot.qml PROPERTIES
     QT_RESOURCE_ALIAS WarningRoot.qml)
+set_source_files_properties(qml/DeferredWarningWidget.qml PROPERTIES
+    QT_RESOURCE_ALIAS DeferredWarningWidget.qml)
 qt_add_library(QtApplicationWarningQml STATIC)
 qt_add_qml_module(QtApplicationWarningQml
     URI StatusBar.TestWarnings
     VERSION 1.0
     RESOURCE_PREFIX /qt/qml
     OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/StatusBar/TestWarnings
-    QML_FILES qml/WarningRoot.qml)
+    DEPENDENCIES TARGET StatusBarQml
+    QML_FILES
+        qml/WarningRoot.qml
+        qml/DeferredWarningWidget.qml)
 
 qt_add_executable(qt_application_test qt_application_test.cpp)
 target_link_libraries(qt_application_test PRIVATE
@@ -58,7 +63,10 @@ foreach(scenario IN ITEMS
         config_failure
         missing_root
         warning_only
-        model_cleanup)
+        model_cleanup
+        run_lifecycle
+        external_root_destruction
+        deferred_widget_failure)
     add_test(
         NAME qt_application_${scenario}
         COMMAND qt_application_test ${scenario})

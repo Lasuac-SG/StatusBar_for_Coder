@@ -1,6 +1,7 @@
 #include "core/config_repository.h"
 #include "platform/cpu_data_source.h"
 #include "ui/qt_application.h"
+#include "widgets/clock/clock_view_model.h"
 #include "widgets/cpu/cpu_view_model.h"
 #include "widgets/registry_setup.h"
 #include "widgets/widget_descriptor.h"
@@ -9,6 +10,7 @@
 #include <QtTest>
 
 #include <QFile>
+#include <QCoreApplication>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickWindow>
@@ -17,23 +19,13 @@
 #include <QTimer>
 
 #include <array>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
 
 namespace {
-
-int applicationConstructionCount{};
-
-bool claimApplicationConstruction() noexcept
-{
-    if (applicationConstructionCount != 0) {
-        return false;
-    }
-    ++applicationConstructionCount;
-    return true;
-}
 
 struct SourceState final {
     int timesCalls{};
@@ -107,6 +99,31 @@ Core::Result<Widgets::WidgetRegistry> failingRegistry()
     return Widgets::WidgetRegistry::create(std::move(descriptors));
 }
 
+Core::Result<Widgets::WidgetRegistry> deferredWarningRegistry()
+{
+    std::vector<Widgets::WidgetDescriptor> descriptors;
+    descriptors.push_back({
+        QStringLiteral("Cpu"),
+        2,
+        QUrl(QStringLiteral("qrc:/qt/qml/StatusBar/CpuWidget.qml")),
+        [](const Core::WidgetConfig& config, Widgets::WidgetContext& context)
+            -> std::unique_ptr<Widgets::WidgetViewModel> {
+            return std::make_unique<Widgets::CpuViewModel>(config, context.cpuService);
+        },
+    });
+    descriptors.push_back({
+        QStringLiteral("DeferredWarning"),
+        1,
+        QUrl(QStringLiteral(
+            "qrc:/qt/qml/StatusBar/TestWarnings/DeferredWarningWidget.qml")),
+        [](const Core::WidgetConfig& config, Widgets::WidgetContext&)
+            -> std::unique_ptr<Widgets::WidgetViewModel> {
+            return std::make_unique<Widgets::ClockViewModel>(config);
+        },
+    });
+    return Widgets::WidgetRegistry::create(std::move(descriptors));
+}
+
 } // namespace
 
 class QtApplicationTest final : public QObject {
@@ -133,11 +150,15 @@ private slots:
             warningOnlyFailure();
         } else if (scenario_ == QStringLiteral("model_cleanup")) {
             modelCleanup();
+        } else if (scenario_ == QStringLiteral("run_lifecycle")) {
+            runLifecycle();
+        } else if (scenario_ == QStringLiteral("external_root_destruction")) {
+            externalRootDestruction();
+        } else if (scenario_ == QStringLiteral("deferred_widget_failure")) {
+            deferredWidgetFailure();
         } else {
             QFAIL(qPrintable(QStringLiteral("Unknown scenario: %1").arg(scenario_)));
         }
-
-        QCOMPARE(applicationConstructionCount, 1);
     }
 
 private:
@@ -155,8 +176,6 @@ private:
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         auto sourceState = std::make_shared<SourceState>();
         ApplicationArguments arguments;
-        const bool mayConstruct = claimApplicationConstruction();
-        QVERIFY2(mayConstruct, "A process may construct only one QtApplication");
         UI::QtApplication application(
             arguments.argc,
             arguments.argv.data(),
@@ -212,8 +231,6 @@ private:
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         auto sourceState = std::make_shared<SourceState>();
         ApplicationArguments arguments;
-        const bool mayConstruct = claimApplicationConstruction();
-        QVERIFY2(mayConstruct, "A process may construct only one QtApplication");
         UI::QtApplication application(
             arguments.argc,
             arguments.argv.data(),
@@ -249,8 +266,6 @@ private:
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         auto sourceState = std::make_shared<SourceState>();
         ApplicationArguments arguments;
-        const bool mayConstruct = claimApplicationConstruction();
-        QVERIFY2(mayConstruct, "A process may construct only one QtApplication");
         UI::QtApplication application(
             arguments.argc,
             arguments.argv.data(),
@@ -298,8 +313,6 @@ private:
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         auto sourceState = std::make_shared<SourceState>();
         ApplicationArguments arguments;
-        const bool mayConstruct = claimApplicationConstruction();
-        QVERIFY2(mayConstruct, "A process may construct only one QtApplication");
         UI::QtApplication application(
             arguments.argc,
             arguments.argv.data(),
@@ -346,8 +359,6 @@ private:
         QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
         auto sourceState = std::make_shared<SourceState>();
         ApplicationArguments arguments;
-        const bool mayConstruct = claimApplicationConstruction();
-        QVERIFY2(mayConstruct, "A process may construct only one QtApplication");
         UI::QtApplication application(
             arguments.argc,
             arguments.argv.data(),
@@ -359,6 +370,111 @@ private:
 
         QVERIFY(!initializeResult.hasValue());
         QVERIFY(initializeResult.error().contains(QStringLiteral("broken")));
+        QCOMPARE(sourceState->timesCalls, 1);
+        QCOMPARE(sourceState->ratioCalls, 1);
+        QTest::qWait(2100);
+        QCOMPARE(sourceState->timesCalls, 1);
+        QCOMPARE(sourceState->ratioCalls, 1);
+    }
+
+    void runLifecycle()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const Core::ConfigRepository repository(
+            directory.filePath(QStringLiteral("config.json")));
+        const auto saveResult = saveConfiguration(repository, {});
+        QVERIFY2(saveResult.hasValue(), qPrintable(saveResult.error()));
+        auto registryResult = Widgets::registerAllWidgets();
+        QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
+        auto sourceState = std::make_shared<SourceState>();
+        ApplicationArguments arguments;
+        UI::QtApplication application(
+            arguments.argc,
+            arguments.argv.data(),
+            repository,
+            std::move(registryResult).value(),
+            std::make_unique<FakeCpuDataSource>(sourceState));
+
+        QCOMPARE(application.run(), EXIT_FAILURE);
+        const auto initializeResult = application.initialize();
+        QVERIFY2(initializeResult.hasValue(), qPrintable(initializeResult.error()));
+        constexpr int exitSentinel = 37;
+        QTimer::singleShot(0, [] { QCoreApplication::exit(exitSentinel); });
+        QCOMPARE(application.run(), exitSentinel);
+    }
+
+    void externalRootDestruction()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const Core::ConfigRepository repository(
+            directory.filePath(QStringLiteral("config.json")));
+        const auto saveResult = saveConfiguration(repository, {});
+        QVERIFY2(saveResult.hasValue(), qPrintable(saveResult.error()));
+        auto registryResult = Widgets::registerAllWidgets();
+        QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
+        auto sourceState = std::make_shared<SourceState>();
+        ApplicationArguments arguments;
+        UI::QtApplication application(
+            arguments.argc,
+            arguments.argv.data(),
+            repository,
+            std::move(registryResult).value(),
+            std::make_unique<FakeCpuDataSource>(sourceState));
+        const auto initializeResult = application.initialize();
+        QVERIFY2(initializeResult.hasValue(), qPrintable(initializeResult.error()));
+        QQuickWindow* const root = application.window();
+        QVERIFY(root != nullptr);
+
+        delete root;
+
+        QVERIFY(application.window() == nullptr);
+        const auto showResult = application.show();
+        QVERIFY(!showResult.hasValue());
+        QCOMPARE(application.run(), EXIT_FAILURE);
+        application.quit();
+    }
+
+    void deferredWidgetFailure()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const Core::ConfigRepository repository(
+            directory.filePath(QStringLiteral("config.json")));
+        const auto saveResult = saveConfiguration(
+            repository,
+            {
+                {QStringLiteral("cpu"), QStringLiteral("Cpu"), 0, {}},
+                {
+                    QStringLiteral("deferred"),
+                    QStringLiteral("DeferredWarning"),
+                    2,
+                    {},
+                },
+            });
+        QVERIFY2(saveResult.hasValue(), qPrintable(saveResult.error()));
+        auto registryResult = deferredWarningRegistry();
+        QVERIFY2(registryResult.hasValue(), qPrintable(registryResult.error()));
+        auto sourceState = std::make_shared<SourceState>();
+        ApplicationArguments arguments;
+        UI::QtApplication application(
+            arguments.argc,
+            arguments.argv.data(),
+            repository,
+            std::move(registryResult).value(),
+            std::make_unique<FakeCpuDataSource>(sourceState));
+
+        QTest::ignoreMessage(
+            QtWarningMsg,
+            QRegularExpression(QStringLiteral(
+                ".*ReferenceError: missingDeferredValue is not defined.*")));
+        const auto initializeResult = application.initialize();
+
+        QVERIFY(!initializeResult.hasValue());
+        QVERIFY(initializeResult.error().contains(
+            QStringLiteral("ReferenceError: missingDeferredValue is not defined")));
+        QVERIFY(application.window() == nullptr);
         QCOMPARE(sourceState->timesCalls, 1);
         QCOMPARE(sourceState->ratioCalls, 1);
         QTest::qWait(2100);

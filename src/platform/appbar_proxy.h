@@ -24,6 +24,10 @@ namespace Platform {
 
         [[nodiscard]] static Core::Result<void> RegisterAppBar();
         [[nodiscard]] static Core::Result<void> SetAppBarPos();
-        static LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+        static LRESULT CALLBACK WndProc(
+            HWND hwnd,
+            UINT uMsg,
+            WPARAM wParam,
+            LPARAM lParam) noexcept;
     };
 }

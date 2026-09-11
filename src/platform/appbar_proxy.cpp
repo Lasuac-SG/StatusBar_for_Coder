@@ -1,5 +1,9 @@
 #include "platform/appbar_proxy.h"
+#include "platform/windows_logging.h"
+
 #include <shellapi.h>
+
+#include <exception>
 
 namespace Platform {
     HWND AppBarProxy::s_proxyHwnd = nullptr;
@@ -157,16 +161,45 @@ namespace Platform {
         s_taskbarRestartMessage = 0;
     }
 
-    LRESULT CALLBACK AppBarProxy::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-        if (uMsg == WM_APPBAR_CALLBACK) {
-            if (wParam == ABN_POSCHANGED) {
-                static_cast<void>(SetAppBarPos());
+    LRESULT CALLBACK AppBarProxy::WndProc(
+        HWND hwnd,
+        UINT uMsg,
+        WPARAM wParam,
+        LPARAM lParam) noexcept {
+        try {
+            if (uMsg == WM_APPBAR_CALLBACK) {
+                if (wParam == ABN_POSCHANGED) {
+                    const auto result = SetAppBarPos();
+                    if (!result.hasValue()) {
+                        LogWindowsMessage(
+                            WindowsLogLevel::Error,
+                            QStringLiteral("AppBar position callback failed: %1")
+                                .arg(result.error()));
+                    }
+                    return 0;
+                }
+            } else if (uMsg == s_taskbarRestartMessage) {
+                const auto result = RegisterAppBar();
+                if (!result.hasValue()) {
+                    LogWindowsMessage(
+                        WindowsLogLevel::Error,
+                        QStringLiteral("AppBar re-registration failed after shell restart: %1")
+                            .arg(result.error()));
+                }
                 return 0;
             }
-        } else if (uMsg == s_taskbarRestartMessage) {
-            static_cast<void>(RegisterAppBar());
+
+            return DefWindowProc(hwnd, uMsg, wParam, lParam);
+        } catch (const std::exception&) {
+            LogWindowsMessage(
+                WindowsLogLevel::Error,
+                QStringLiteral("Unhandled exception in AppBar window procedure"));
+            return 0;
+        } catch (...) {
+            LogWindowsMessage(
+                WindowsLogLevel::Error,
+                QStringLiteral("Unknown exception in AppBar window procedure"));
             return 0;
         }
-        return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
 }

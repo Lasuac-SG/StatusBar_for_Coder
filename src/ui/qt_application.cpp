@@ -1,7 +1,11 @@
 #include "ui/qt_application.h"
 
+#include <QCoreApplication>
+#include <QDeadlineTimer>
+#include <QEventLoop>
 #include <QFont>
 #include <QQmlError>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QUrl>
 #include <QVariant>
@@ -10,6 +14,28 @@
 #include <utility>
 
 namespace UI {
+
+namespace {
+
+constexpr int maximumInitialQmlEventTurns = 32;
+constexpr int loaderNull = 0;
+constexpr int loaderReady = 1;
+constexpr int loaderLoading = 2;
+constexpr int loaderError = 3;
+
+void collectWidgetLoaders(
+    QQuickItem* const item,
+    QList<QQuickItem*>& loaders)
+{
+    if (item->objectName() == QStringLiteral("widgetLoader")) {
+        loaders.append(item);
+    }
+    for (QQuickItem* const child : item->childItems()) {
+        collectWidgetLoaders(child, loaders);
+    }
+}
+
+} // namespace
 
 QtApplication::QtApplication(
     int& argc,
@@ -105,6 +131,16 @@ Core::Result<void> QtApplication::initialize()
                 .arg(qmlEntryPoint_.moduleUri, qmlEntryPoint_.typeName));
     }
 
+    const auto readyResult = awaitInitialQmlReady(rootWindow);
+    if (!readyResult.hasValue()) {
+        return failInitialization(
+            QStringLiteral("Failed to load QML root %1.%2: %3")
+                .arg(
+                    qmlEntryPoint_.moduleUri,
+                    qmlEntryPoint_.typeName,
+                    readyResult.error()));
+    }
+
     rootWindow_ = rootWindow;
     state_ = State::Initialized;
     return Core::Result<void>::success();
@@ -146,6 +182,75 @@ Core::Result<void> QtApplication::failInitialization(QString error)
     failure_ = std::move(error);
     state_ = State::Failed;
     return Core::Result<void>::failure(failure_);
+}
+
+Core::Result<void> QtApplication::awaitInitialQmlReady(QQuickWindow* const rootWindow)
+{
+    QPointer<QQuickWindow> guardedRoot(rootWindow);
+    int consecutiveReadyTurns = 0;
+
+    for (int turn = 0; turn < maximumInitialQmlEventTurns; ++turn) {
+        QCoreApplication::processEvents(
+            QEventLoop::AllEvents, QDeadlineTimer(10));
+
+        if (guardedRoot == nullptr) {
+            return Core::Result<void>::failure(
+                QStringLiteral("root window was destroyed during initial QML loading"));
+        }
+        if (objectCreationFailed_ || !qmlDiagnostics_.isEmpty()) {
+            return Core::Result<void>::failure(
+                qmlDiagnostics_.isEmpty()
+                    ? QStringLiteral("QML object creation failed")
+                    : qmlDiagnostics_.join(QLatin1Char('\n')));
+        }
+
+        QQuickItem* const contentItem = guardedRoot->contentItem();
+        if (contentItem == nullptr) {
+            return Core::Result<void>::failure(
+                QStringLiteral("root window has no content item"));
+        }
+
+        QList<QQuickItem*> loaders;
+        collectWidgetLoaders(contentItem, loaders);
+        bool allLoadersReady = loaders.size() == widgetModel_.rowCount();
+        for (QQuickItem* const loader : loaders) {
+            const QVariant statusValue = loader->property("status");
+            if (!statusValue.isValid()) {
+                return Core::Result<void>::failure(
+                    QStringLiteral("widget loader has no status property"));
+            }
+
+            const int status = statusValue.toInt();
+            if (status == loaderError) {
+                return Core::Result<void>::failure(
+                    QStringLiteral("configured widget loader reported an error"));
+            }
+            if (status == loaderNull || status == loaderLoading) {
+                allLoadersReady = false;
+            } else if (status != loaderReady) {
+                return Core::Result<void>::failure(
+                    QStringLiteral("configured widget loader reported unknown status %1")
+                        .arg(status));
+            }
+        }
+
+        if (allLoadersReady) {
+            // The second ready turn catches work posted by a widget's completion handlers.
+            ++consecutiveReadyTurns;
+            if (consecutiveReadyTurns == 2) {
+                return Core::Result<void>::success();
+            }
+        } else {
+            consecutiveReadyTurns = 0;
+        }
+    }
+
+    return Core::Result<void>::failure(
+        QStringLiteral(
+            "configured widgets did not become ready within %1 event turns "
+            "(expected %2 loaders)")
+            .arg(maximumInitialQmlEventTurns)
+            .arg(widgetModel_.rowCount()));
 }
 
 void QtApplication::discardRootObjects() noexcept

@@ -3,6 +3,7 @@
 #include "platform/cpu_data_source.h"
 #include "platform/display.h"
 #include "platform/tray_icon.h"
+#include "platform/windows_logging.h"
 #include "ui/qt_application.h"
 #include "widgets/registry_setup.h"
 
@@ -17,10 +18,11 @@
 
 #include <cmath>
 #include <cstdint>
-#include <iostream>
+#include <algorithm>
+#include <exception>
 #include <memory>
-#include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -51,17 +53,54 @@ private:
     HANDLE handle_;
 };
 
-QString executableDirectory(const int argc, char** argv)
+Core::Result<QString> executableDirectory()
 {
-    if (argc <= 0 || argv == nullptr || argv[0] == nullptr) {
-        return QDir::currentPath();
+    constexpr std::size_t maximumModulePathLength = 32768;
+    std::vector<wchar_t> buffer(512);
+
+    while (buffer.size() <= maximumModulePathLength) {
+        SetLastError(ERROR_SUCCESS);
+        const DWORD length = GetModuleFileNameW(
+            nullptr,
+            buffer.data(),
+            static_cast<DWORD>(buffer.size()));
+        const DWORD error = GetLastError();
+        if (length == 0) {
+            return Core::Result<QString>::failure(
+                QStringLiteral(
+                    "GetModuleFileNameW failed while locating the executable "
+                    "(Win32 error %1)")
+                    .arg(error));
+        }
+        if (length < buffer.size() && buffer[length] == L'\0') {
+            const QString modulePath =
+                QString::fromWCharArray(buffer.data(), static_cast<qsizetype>(length));
+            return Core::Result<QString>::success(
+                QFileInfo(modulePath).absolutePath());
+        }
+        if (buffer.size() == maximumModulePathLength) {
+            return Core::Result<QString>::failure(
+                QStringLiteral(
+                    "Executable module path exceeds the Windows maximum "
+                    "(Win32 error %1)")
+                    .arg(error));
+        }
+
+        buffer.resize(std::min(buffer.size() * 2, maximumModulePathLength));
     }
-    return QFileInfo(QString::fromLocal8Bit(argv[0])).absolutePath();
+
+    return Core::Result<QString>::failure(
+        QStringLiteral("Cannot determine the executable module directory"));
 }
 
 void logFatal(const QString& message)
 {
-    std::cerr << "[Fatal Error] " << message.toStdString() << '\n';
+    Platform::LogWindowsMessage(Platform::WindowsLogLevel::Error, message);
+}
+
+void logWarning(const QString& message)
+{
+    Platform::LogWindowsMessage(Platform::WindowsLogLevel::Warning, message);
 }
 
 } // namespace
@@ -104,10 +143,19 @@ int main(int argc, char** argv)
 
         const QString configPath =
             QDir(configDirectory).filePath(QStringLiteral("config.json"));
-        const QStringList legacyCandidates{
-            QDir(executableDirectory(argc, argv)).filePath(QStringLiteral("config.json")),
-            QDir::current().filePath(QStringLiteral("config.json")),
-        };
+        QStringList legacyCandidates;
+        const auto executableDirectoryResult = executableDirectory();
+        if (executableDirectoryResult.hasValue()) {
+            legacyCandidates.append(
+                QDir(executableDirectoryResult.value())
+                    .filePath(QStringLiteral("config.json")));
+        } else {
+            logWarning(
+                QStringLiteral("%1; executable-directory config migration is skipped")
+                    .arg(executableDirectoryResult.error()));
+        }
+        legacyCandidates.append(
+            QDir::current().filePath(QStringLiteral("config.json")));
         auto registryResult = Widgets::registerAllWidgets();
         if (!registryResult.hasValue()) {
             logFatal(
@@ -158,7 +206,7 @@ int main(int argc, char** argv)
         trayIcon.SetQuitCallback([&application] { application.quit(); });
         const auto trayResult = trayIcon.Initialize();
         if (!trayResult.hasValue()) {
-            std::cerr << "[Warning] " << trayResult.error().toStdString() << '\n';
+            logWarning(trayResult.error());
         }
 
         const auto showResult = application.show();
@@ -168,10 +216,16 @@ int main(int argc, char** argv)
         }
         return application.run();
     } catch (const std::exception& error) {
-        std::cerr << "[Fatal Error] " << error.what() << '\n';
+        try {
+            logFatal(
+                QStringLiteral("Unhandled startup exception: %1")
+                    .arg(QString::fromUtf8(error.what())));
+        } catch (...) {
+            logFatal(QStringLiteral("Unhandled startup exception"));
+        }
         return 1;
     } catch (...) {
-        std::cerr << "[Fatal Error] Unknown startup failure\n";
+        logFatal(QStringLiteral("Unknown startup failure"));
         return 1;
     }
 }
