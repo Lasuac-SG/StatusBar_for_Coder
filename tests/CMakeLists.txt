@@ -9,6 +9,10 @@ qt_add_executable(layout_engine_test layout_engine_test.cpp)
 target_link_libraries(layout_engine_test PRIVATE statusbar_core Qt6::Test)
 add_test(NAME layout_engine_test COMMAND layout_engine_test)
 
+qt_add_executable(appbar_geometry_test appbar_geometry_test.cpp)
+target_link_libraries(appbar_geometry_test PRIVATE statusbar_core Qt6::Test)
+add_test(NAME appbar_geometry_test COMMAND appbar_geometry_test)
+
 qt_add_executable(config_repository_test config_repository_test.cpp)
 target_link_libraries(config_repository_test PRIVATE statusbar_core Qt6::Test)
 add_test(NAME config_repository_test COMMAND config_repository_test)

@@ -19,14 +19,16 @@ target_sources(statusbar_core PRIVATE
     src/core/config_repository.cpp
     src/core/layout_engine.h
     src/core/layout_engine.cpp
-    src/platform/appbar_proxy.h
-    src/platform/appbar_proxy.cpp
+    src/platform/appbar.h
+    src/platform/appbar.cpp
     src/platform/cpu_service.h
     src/platform/cpu_service.cpp
-    src/platform/display.h
-    src/platform/display.cpp
+    src/platform/single_instance.h
+    src/platform/single_instance.cpp
     src/platform/tray_icon.h
     src/platform/tray_icon.cpp
+    src/platform/windows_shell_integration.h
+    src/platform/windows_shell_integration.cpp
     src/platform/windows_logging.h
     src/platform/windows_logging.cpp
     src/ui/widget_model.h

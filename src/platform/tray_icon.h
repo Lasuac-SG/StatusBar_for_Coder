@@ -1,36 +1,51 @@
 #pragma once
+
 #include "core/result.h"
 
 #include <windows.h>
+
 #include <functional>
 
 namespace Platform {
-    class TrayIcon {
-    public:
-        TrayIcon();
-        ~TrayIcon();
 
-        TrayIcon(const TrayIcon&) = delete;
-        TrayIcon& operator=(const TrayIcon&) = delete;
-        TrayIcon(TrayIcon&&) = delete;
-        TrayIcon& operator=(TrayIcon&&) = delete;
+class TrayIcon final {
+public:
+    TrayIcon() = default;
+    ~TrayIcon();
 
-        [[nodiscard]] Core::Result<void> Initialize();
-        void SetQuitCallback(std::function<void()> callback) noexcept;
+    TrayIcon(const TrayIcon&) = delete;
+    TrayIcon& operator=(const TrayIcon&) = delete;
+    TrayIcon(TrayIcon&&) = delete;
+    TrayIcon& operator=(TrayIcon&&) = delete;
 
-    private:
-        HWND m_messageHwnd = nullptr;
-        bool m_isRegistered{};
-        std::function<void()> m_quitCallback;
-        static constexpr UINT WM_TRAY_CALLBACK = WM_USER + 2048;
+    [[nodiscard]] Core::Result<void> initialize(std::function<void()> quitCallback);
+    [[nodiscard]] Core::Result<void> recoverAfterShellRestart();
+    void shutdown() noexcept;
 
-        static LRESULT CALLBACK WndProc(
-            HWND hwnd,
-            UINT uMsg,
-            WPARAM wParam,
-            LPARAM lParam) noexcept;
-        LRESULT HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-        [[nodiscard]] Core::Result<void> ShowContextMenu() const;
-        void DestroyMessageWindow() noexcept;
-    };
-}
+    [[nodiscard]] UINT taskbarCreatedMessage() const noexcept
+    {
+        return taskbarCreatedMessage_;
+    }
+
+private:
+    [[nodiscard]] Core::Result<void> addNotification();
+    [[nodiscard]] Core::Result<void> showContextMenu();
+    void destroyMessageWindow() noexcept;
+
+    static LRESULT CALLBACK windowProcedure(
+        HWND window,
+        UINT message,
+        WPARAM wParam,
+        LPARAM lParam) noexcept;
+    LRESULT handleMessage(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
+
+    static constexpr UINT callbackMessage_ = WM_APP + 0x352;
+    static constexpr UINT iconId_ = 1;
+
+    HWND messageWindow_{};
+    UINT taskbarCreatedMessage_{};
+    bool registered_{};
+    std::function<void()> quitCallback_;
+};
+
+} // namespace Platform
