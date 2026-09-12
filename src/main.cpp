@@ -1,6 +1,5 @@
 #include "core/config_repository.h"
 #include "platform/cpu_data_source.h"
-#include "platform/single_instance.h"
 #include "platform/windows_logging.h"
 #include "platform/windows_shell_integration.h"
 #include "ui/qt_application.h"
@@ -10,6 +9,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QQuickWindow>
+#include <QScopeGuard>
 #include <QStandardPaths>
 
 #include <windows.h>
@@ -72,13 +72,13 @@ void logWarning(const QString& message)
 int main(int argc, char** argv)
 {
     try {
-        Platform::SingleInstance singleInstance;
-        const auto instanceResult = singleInstance.initialize(singleInstanceMutexName);
+        Platform::WindowsShellIntegration shell;
+        const auto instanceResult = shell.acquireSingleInstance(singleInstanceMutexName);
         if (!instanceResult.hasValue()) {
             logFatal(instanceResult.error());
             return EXIT_FAILURE;
         }
-        if (singleInstance.alreadyRunning()) {
+        if (shell.alreadyRunning()) {
             return EXIT_SUCCESS;
         }
 
@@ -119,6 +119,7 @@ int main(int argc, char** argv)
             Core::ConfigRepository(configPath, legacyCandidates),
             std::move(registryResult).value(),
             std::make_unique<Platform::WindowsCpuDataSource>());
+        const auto shellCleanup = qScopeGuard([&shell] { shell.shutdown(); });
         const auto initializeResult = application.initialize();
         if (!initializeResult.hasValue()) {
             logFatal(initializeResult.error());
@@ -133,7 +134,6 @@ int main(int argc, char** argv)
             return EXIT_FAILURE;
         }
 
-        Platform::WindowsShellIntegration shell;
         const auto shellResult = shell.initialize(
             rootWindow, logicalBarHeight, [&application] { application.quit(); });
         if (!shellResult.hasValue()) {

@@ -3,6 +3,7 @@
 #include "platform/windows_logging.h"
 
 #include <QCoreApplication>
+#include <QObject>
 #include <QTimer>
 
 #include <shellapi.h>
@@ -16,6 +17,11 @@ namespace Platform {
 WindowsShellIntegration::~WindowsShellIntegration()
 {
     shutdown();
+}
+
+Core::Result<void> WindowsShellIntegration::acquireSingleInstance(const wchar_t* const name)
+{
+    return singleInstance_.initialize(name);
 }
 
 Core::Result<void> WindowsShellIntegration::initialize(
@@ -34,6 +40,7 @@ Core::Result<void> WindowsShellIntegration::initialize(
         return Core::Result<void>::failure(
             QStringLiteral("Cannot install Windows shell integration without QCoreApplication"));
     }
+    auto callbackContext = std::make_unique<QObject>();
 
     const auto appBarResult = appBar_.initialize(rootWindow, logicalHeight);
     if (!appBarResult.hasValue()) {
@@ -42,16 +49,14 @@ Core::Result<void> WindowsShellIntegration::initialize(
 
     const auto trayResult = trayIcon_.initialize(std::move(quitCallback));
     if (!trayResult.hasValue()) {
-        trayAvailable_ = false;
         LogWindowsMessage(
             WindowsLogLevel::Warning,
             QStringLiteral("Tray icon is unavailable; continuing without it: %1")
                 .arg(trayResult.error()));
-    } else {
-        trayAvailable_ = true;
     }
 
     rootWindow_ = rootWindow;
+    callbackContext_ = std::move(callbackContext);
     application->installNativeEventFilter(this);
     installed_ = true;
     return Core::Result<void>::success();
@@ -60,15 +65,16 @@ Core::Result<void> WindowsShellIntegration::initialize(
 void WindowsShellIntegration::shutdown() noexcept
 {
     try {
+        deferredReposition_.cancel();
         if (installed_) {
             if (auto* const application = QCoreApplication::instance()) {
                 application->removeNativeEventFilter(this);
             }
             installed_ = false;
         }
+        callbackContext_.reset();
         trayIcon_.shutdown();
         appBar_.shutdown();
-        trayAvailable_ = false;
         fatalExitRequested_ = false;
         rootWindow_ = nullptr;
     } catch (const std::exception&) {
@@ -79,6 +85,47 @@ void WindowsShellIntegration::shutdown() noexcept
         LogWindowsMessage(
             WindowsLogLevel::Error,
             QStringLiteral("Unknown exception while shutting down Windows shell integration"));
+    }
+}
+
+void WindowsShellIntegration::queueReposition()
+{
+    const auto token = deferredReposition_.request();
+    if (!token.has_value()) {
+        return;
+    }
+    if (callbackContext_ == nullptr) {
+        deferredReposition_.cancel();
+        return;
+    }
+    try {
+        QTimer::singleShot(
+            0,
+            callbackContext_.get(),
+            [this, value = *token]() noexcept { runQueuedReposition(value); });
+    } catch (...) {
+        deferredReposition_.cancel();
+        throw;
+    }
+}
+
+void WindowsShellIntegration::runQueuedReposition(
+    const Detail::CoalescedCall::Token token) noexcept
+{
+    try {
+        if (!deferredReposition_.consume(token) || !installed_ || fatalExitRequested_) {
+            return;
+        }
+        const auto result = appBar_.reposition();
+        if (!result.hasValue()) {
+            handleFatalAppBarFailure(
+                QStringLiteral("Deferred AppBar display/DPI reposition failed"),
+                result.error());
+        }
+    } catch (...) {
+        handleFatalAppBarFailure(
+            QStringLiteral("Deferred AppBar reposition raised an exception"),
+            QStringLiteral("unknown failure"));
     }
 }
 
@@ -129,15 +176,22 @@ bool WindowsShellIntegration::nativeEventFilter(
         }
 
         if (message->message == WM_DISPLAYCHANGE || message->message == WM_DPICHANGED) {
-            const auto result = appBar_.reposition();
-            if (!result.hasValue()) {
-                handleFatalAppBarFailure(
-                    QStringLiteral("AppBar display/DPI reposition failed"), result.error());
-            }
+            queueReposition();
             return false;
         }
 
-        if (message->message == appBar_.taskbarCreatedMessage()) {
+        if (message->message == WM_ACTIVATE) {
+            appBar_.notifyActivated();
+            return false;
+        }
+
+        if (message->message == WM_WINDOWPOSCHANGED) {
+            appBar_.notifyWindowPosChanged();
+            return false;
+        }
+
+        const UINT taskbarCreated = trayIcon_.taskbarCreatedMessage();
+        if (taskbarCreated != 0 && message->message == taskbarCreated) {
             const auto appBarResult = appBar_.recoverAfterShellRestart();
             if (!appBarResult.hasValue()) {
                 handleFatalAppBarFailure(
@@ -145,14 +199,12 @@ bool WindowsShellIntegration::nativeEventFilter(
                     appBarResult.error());
             }
 
-            if (trayAvailable_) {
-                const auto trayResult = trayIcon_.recoverAfterShellRestart();
-                if (!trayResult.hasValue()) {
-                    LogWindowsMessage(
-                        WindowsLogLevel::Warning,
-                        QStringLiteral("Tray recovery after Explorer restart failed: %1")
-                            .arg(trayResult.error()));
-                }
+            const auto trayResult = trayIcon_.recoverAfterShellRestart();
+            if (!trayResult.hasValue()) {
+                LogWindowsMessage(
+                    WindowsLogLevel::Warning,
+                    QStringLiteral("Tray recovery after Explorer restart failed: %1")
+                        .arg(trayResult.error()));
             }
             return false;
         }

@@ -1,11 +1,5 @@
 #include "platform/appbar.h"
 
-#include "platform/windows_logging.h"
-
-#include <shellapi.h>
-
-#include <exception>
-
 namespace Platform {
 
 RECT topAppBarRect(
@@ -53,19 +47,9 @@ Core::Result<void> AppBar::initialize(const HWND window, const int logicalHeight
                 .arg(GetLastError()));
     }
 
-    SetLastError(ERROR_SUCCESS);
-    const UINT taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
-    if (taskbarCreated == 0) {
-        return Core::Result<void>::failure(
-            QStringLiteral(
-                "Cannot register TaskbarCreated for AppBar recovery (Win32 error %1)")
-                .arg(GetLastError()));
-    }
-
     window_ = window;
     logicalHeight_ = logicalHeight;
     callbackMessage_ = callback;
-    taskbarCreatedMessage_ = taskbarCreated;
 
     const auto result = registerWithShell();
     if (!result.hasValue()) {
@@ -81,7 +65,7 @@ Core::Result<void> AppBar::registerWithShell()
     data.hWnd = window_;
     data.uCallbackMessage = callbackMessage_;
     data.uEdge = ABE_TOP;
-    if (SHAppBarMessage(ABM_NEW, &data) == 0) {
+    if (api_.message(ABM_NEW, &data) == 0) {
         return Core::Result<void>::failure(
             QStringLiteral("Cannot register AppBar with the Windows shell (ABM_NEW failed)"));
     }
@@ -139,17 +123,11 @@ Core::Result<void> AppBar::reposition()
         monitorInfo.rcMonitor,
         monitorInfo.rcMonitor,
         static_cast<LONG>(physicalHeight));
-    if (SHAppBarMessage(ABM_QUERYPOS, &data) == 0) {
-        return Core::Result<void>::failure(
-            QStringLiteral("Cannot position AppBar: ABM_QUERYPOS failed"));
-    }
+    api_.message(ABM_QUERYPOS, &data);
 
     data.rc = topAppBarRect(
         monitorInfo.rcMonitor, data.rc, static_cast<LONG>(physicalHeight));
-    if (SHAppBarMessage(ABM_SETPOS, &data) == 0) {
-        return Core::Result<void>::failure(
-            QStringLiteral("Cannot position AppBar: ABM_SETPOS failed"));
-    }
+    api_.message(ABM_SETPOS, &data);
 
     SetLastError(ERROR_SUCCESS);
     if (!SetWindowPos(
@@ -175,8 +153,34 @@ Core::Result<void> AppBar::recoverAfterShellRestart()
             QStringLiteral("Cannot recover AppBar: root HWND is invalid"));
     }
 
+    sendShell(ABM_REMOVE);
     registered_ = false;
     return registerWithShell();
+}
+
+void AppBar::notifyActivated() noexcept
+{
+    if (registered_) {
+        sendShell(ABM_ACTIVATE);
+    }
+}
+
+void AppBar::notifyWindowPosChanged() noexcept
+{
+    if (registered_) {
+        sendShell(ABM_WINDOWPOSCHANGED);
+    }
+}
+
+void AppBar::sendShell(const DWORD message) noexcept
+{
+    if (window_ == nullptr) {
+        return;
+    }
+    APPBARDATA data{};
+    data.cbSize = sizeof(data);
+    data.hWnd = window_;
+    api_.message(message, &data);
 }
 
 void AppBar::removeRegistration() noexcept
@@ -185,35 +189,16 @@ void AppBar::removeRegistration() noexcept
         return;
     }
 
-    APPBARDATA data{};
-    data.cbSize = sizeof(data);
-    data.hWnd = window_;
-    const bool removed = SHAppBarMessage(ABM_REMOVE, &data) != 0;
+    sendShell(ABM_REMOVE);
     registered_ = false;
-    if (!removed) {
-        LogWindowsMessage(
-            WindowsLogLevel::Error,
-            QStringLiteral("Cannot remove AppBar registration (ABM_REMOVE failed)"));
-    }
 }
 
 void AppBar::shutdown() noexcept
 {
-    try {
-        removeRegistration();
-        window_ = nullptr;
-        logicalHeight_ = 0;
-        callbackMessage_ = 0;
-        taskbarCreatedMessage_ = 0;
-    } catch (const std::exception&) {
-        LogWindowsMessage(
-            WindowsLogLevel::Error,
-            QStringLiteral("Unhandled exception while shutting down AppBar"));
-    } catch (...) {
-        LogWindowsMessage(
-            WindowsLogLevel::Error,
-            QStringLiteral("Unknown exception while shutting down AppBar"));
-    }
+    removeRegistration();
+    window_ = nullptr;
+    logicalHeight_ = 0;
+    callbackMessage_ = 0;
 }
 
 } // namespace Platform

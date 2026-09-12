@@ -4,11 +4,12 @@
 #include "platform/resource.h"
 #include "platform/windows_logging.h"
 
-#include <shellapi.h>
+#include <windowsx.h>
 
 #include <algorithm>
 #include <exception>
 #include <iterator>
+#include <limits>
 #include <utility>
 
 namespace Platform {
@@ -24,6 +25,15 @@ bool setInstance(const HWND window, TrayIcon* const instance, DWORD& error) noex
         window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(instance));
     error = GetLastError();
     return previous != 0 || error == ERROR_SUCCESS;
+}
+
+NOTIFYICONDATAW notificationData(const HWND window, const UINT iconId) noexcept
+{
+    NOTIFYICONDATAW notification{};
+    notification.cbSize = sizeof(notification);
+    notification.hWnd = window;
+    notification.uID = iconId;
+    return notification;
 }
 
 class Menu final {
@@ -69,6 +79,32 @@ private:
 
 } // namespace
 
+std::optional<Detail::TrayNotification> Detail::decodeTrayNotification(
+    const WPARAM packedPoint,
+    const LPARAM packedNotification,
+    const UINT iconId) noexcept
+{
+    if (iconId > std::numeric_limits<WORD>::max()
+        || HIWORD(packedNotification) != iconId) {
+        return std::nullopt;
+    }
+
+    const UINT notification = LOWORD(packedNotification);
+    if (notification != WM_RBUTTONUP
+        && notification != WM_CONTEXTMENU
+        && notification != NIN_KEYSELECT) {
+        return std::nullopt;
+    }
+
+    const POINT point{GET_X_LPARAM(packedPoint), GET_Y_LPARAM(packedPoint)};
+    return Detail::TrayNotification{
+        notification,
+        point,
+        notification == NIN_KEYSELECT
+            || (notification == WM_CONTEXTMENU && point.x == -1 && point.y == -1),
+    };
+}
+
 TrayIcon::~TrayIcon()
 {
     shutdown();
@@ -76,27 +112,40 @@ TrayIcon::~TrayIcon()
 
 Core::Result<void> TrayIcon::initialize(std::function<void()> quitCallback)
 {
-    if (messageWindow_ != nullptr) {
-        return Core::Result<void>::success();
+    if (!quitCallback) {
+        return Core::Result<void>::failure(
+            QStringLiteral("Cannot initialize tray icon without a quit callback"));
     }
 
-    SetLastError(ERROR_SUCCESS);
-    taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
     if (taskbarCreatedMessage_ == 0) {
-        return Core::Result<void>::failure(
-            QStringLiteral("Cannot register TaskbarCreated for tray recovery (Win32 error %1)")
-                .arg(GetLastError()));
+        SetLastError(ERROR_SUCCESS);
+        taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
+        if (taskbarCreatedMessage_ == 0) {
+            return Core::Result<void>::failure(
+                QStringLiteral("Cannot register TaskbarCreated for tray recovery (Win32 error %1)")
+                    .arg(GetLastError()));
+        }
     }
     quitCallback_ = std::move(quitCallback);
 
+    if (messageWindow_ == nullptr || !IsWindow(messageWindow_)) {
+        messageWindow_ = nullptr;
+        const auto result = createMessageWindow();
+        if (!result.hasValue()) {
+            return result;
+        }
+    }
+    return registered_ ? Core::Result<void>::success() : addNotification();
+}
+
+Core::Result<void> TrayIcon::createMessageWindow()
+{
     SetLastError(ERROR_SUCCESS);
     const HINSTANCE instance = GetModuleHandleW(nullptr);
     if (instance == nullptr) {
-        const DWORD error = GetLastError();
-        shutdown();
         return Core::Result<void>::failure(
             QStringLiteral("Cannot obtain the tray module handle (Win32 error %1)")
-                .arg(error));
+                .arg(GetLastError()));
     }
 
     WNDCLASSEXW windowClass{};
@@ -108,7 +157,6 @@ Core::Result<void> TrayIcon::initialize(std::function<void()> quitCallback)
     const ATOM atom = RegisterClassExW(&windowClass);
     const DWORD classError = atom == 0 ? GetLastError() : ERROR_SUCCESS;
     if (atom == 0 && classError != ERROR_CLASS_ALREADY_EXISTS) {
-        shutdown();
         return Core::Result<void>::failure(
             QStringLiteral("Cannot register tray window class (Win32 error %1)")
                 .arg(classError));
@@ -129,18 +177,11 @@ Core::Result<void> TrayIcon::initialize(std::function<void()> quitCallback)
         instance,
         this);
     if (messageWindow_ == nullptr) {
-        const DWORD error = GetLastError();
-        shutdown();
         return Core::Result<void>::failure(
             QStringLiteral("Cannot create or bind tray message window (Win32 error %1)")
-                .arg(error));
+                .arg(GetLastError()));
     }
-
-    const auto result = addNotification();
-    if (!result.hasValue()) {
-        shutdown();
-    }
-    return result;
+    return Core::Result<void>::success();
 }
 
 Core::Result<void> TrayIcon::addNotification()
@@ -159,69 +200,98 @@ Core::Result<void> TrayIcon::addNotification()
     }
 
     SetLastError(ERROR_SUCCESS);
-    const HICON icon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
+    const HICON icon = api_.loadIcon(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
     if (icon == nullptr) {
         return Core::Result<void>::failure(
             QStringLiteral("Cannot load tray icon resource (Win32 error %1)")
                 .arg(GetLastError()));
     }
 
-    NOTIFYICONDATAW notification{};
-    notification.cbSize = sizeof(notification);
-    notification.hWnd = messageWindow_;
-    notification.uID = iconId_;
-    notification.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    auto notification = notificationData(messageWindow_, iconId_);
+    notification.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
     notification.uCallbackMessage = callbackMessage_;
     notification.hIcon = icon;
     constexpr wchar_t tooltip[] = L"StatusBar";
     static_assert(std::size(tooltip) <= std::size(notification.szTip));
     std::copy(std::begin(tooltip), std::end(tooltip), std::begin(notification.szTip));
 
-    if (!Shell_NotifyIconW(NIM_ADD, &notification)) {
+    if (!api_.notifyIcon(NIM_ADD, &notification)) {
         return Core::Result<void>::failure(
             QStringLiteral("Cannot add the StatusBar notification icon"));
     }
     registered_ = true;
 
     notification.uVersion = NOTIFYICON_VERSION_4;
-    if (!Shell_NotifyIconW(NIM_SETVERSION, &notification)) {
-        NOTIFYICONDATAW removal{};
-        removal.cbSize = sizeof(removal);
-        removal.hWnd = messageWindow_;
-        removal.uID = iconId_;
-        if (!Shell_NotifyIconW(NIM_DELETE, &removal)) {
+    if (!api_.notifyIcon(NIM_SETVERSION, &notification)) {
+        if (!removeNotification()) {
             LogWindowsMessage(
                 WindowsLogLevel::Error,
                 QStringLiteral("Cannot roll back tray icon after NIM_SETVERSION failure"));
         }
-        registered_ = false;
         return Core::Result<void>::failure(
             QStringLiteral("Cannot select the tray notification protocol version"));
     }
-
     return Core::Result<void>::success();
+}
+
+bool TrayIcon::removeNotification()
+{
+    if (!registered_ || messageWindow_ == nullptr) {
+        return true;
+    }
+    auto notification = notificationData(messageWindow_, iconId_);
+    registered_ = false;
+    return api_.notifyIcon(NIM_DELETE, &notification);
 }
 
 Core::Result<void> TrayIcon::recoverAfterShellRestart()
 {
-    if (messageWindow_ == nullptr || !IsWindow(messageWindow_)) {
+    if (taskbarCreatedMessage_ == 0 || !quitCallback_) {
         return Core::Result<void>::failure(
-            QStringLiteral("Cannot recover tray icon: message window is invalid"));
+            QStringLiteral("Cannot recover tray icon before initialization"));
     }
+
     registered_ = false;
+    if (messageWindow_ == nullptr || !IsWindow(messageWindow_)) {
+        messageWindow_ = nullptr;
+        const auto result = createMessageWindow();
+        if (!result.hasValue()) {
+            return result;
+        }
+    }
     return addNotification();
 }
 
-Core::Result<void> TrayIcon::showContextMenu()
+Core::Result<POINT> TrayIcon::notificationAnchor(
+    POINT point,
+    const bool needsIconRect) const
 {
-    POINT point{};
-    SetLastError(ERROR_SUCCESS);
-    if (!GetCursorPos(&point)) {
-        return Core::Result<void>::failure(
-            QStringLiteral("Cannot locate cursor for tray menu (Win32 error %1)")
-                .arg(GetLastError()));
+    if (!needsIconRect) {
+        return Core::Result<POINT>::success(point);
     }
 
+    NOTIFYICONIDENTIFIER identifier{};
+    identifier.cbSize = sizeof(identifier);
+    identifier.hWnd = messageWindow_;
+    identifier.uID = iconId_;
+    RECT iconRect{};
+    if (SUCCEEDED(api_.notifyIconRect(&identifier, &iconRect))) {
+        point.x = iconRect.left + ((iconRect.right - iconRect.left) / 2);
+        point.y = iconRect.bottom;
+        return Core::Result<POINT>::success(point);
+    }
+
+    SetLastError(ERROR_SUCCESS);
+    if (GetCursorPos(&point)) {
+        return Core::Result<POINT>::success(point);
+    }
+    return Core::Result<POINT>::failure(
+        QStringLiteral("Cannot locate the tray menu anchor (Win32 error %1)")
+            .arg(GetLastError()));
+}
+
+Core::Result<void> TrayIcon::showContextMenu(const POINT point)
+{
     SetLastError(ERROR_SUCCESS);
     Menu menu(CreatePopupMenu());
     if (menu.get() == nullptr) {
@@ -252,7 +322,6 @@ Core::Result<void> TrayIcon::showContextMenu()
         messageWindow_,
         nullptr);
     const DWORD trackingError = GetLastError();
-
     const DWORD closeError = menu.release();
 
     SetLastError(ERROR_SUCCESS);
@@ -290,7 +359,6 @@ void TrayIcon::destroyMessageWindow() noexcept
         const HWND window = std::exchange(messageWindow_, nullptr);
         DWORD bindingError = ERROR_SUCCESS;
         const bool bindingCleared = setInstance(window, nullptr, bindingError);
-
         SetLastError(ERROR_SUCCESS);
         const bool destroyed = DestroyWindow(window);
         const DWORD destroyError = GetLastError();
@@ -317,18 +385,11 @@ void TrayIcon::destroyMessageWindow() noexcept
 void TrayIcon::shutdown() noexcept
 {
     try {
-        if (registered_ && messageWindow_ != nullptr) {
-            NOTIFYICONDATAW notification{};
-            notification.cbSize = sizeof(notification);
-            notification.hWnd = messageWindow_;
-            notification.uID = iconId_;
-            if (!Shell_NotifyIconW(NIM_DELETE, &notification)) {
-                LogWindowsMessage(
-                    WindowsLogLevel::Error,
-                    QStringLiteral("Cannot remove the StatusBar notification icon"));
-            }
+        if (!removeNotification()) {
+            LogWindowsMessage(
+                WindowsLogLevel::Error,
+                QStringLiteral("Cannot remove the StatusBar notification icon"));
         }
-        registered_ = false;
         destroyMessageWindow();
         quitCallback_ = {};
         taskbarCreatedMessage_ = 0;
@@ -382,10 +443,9 @@ LRESULT CALLBACK TrayIcon::windowProcedure(
             }
             return DefWindowProcW(window, message, wParam, lParam);
         }
-        if (instance != nullptr) {
-            return instance->handleMessage(window, message, wParam, lParam);
-        }
-        return DefWindowProcW(window, message, wParam, lParam);
+        return instance == nullptr
+            ? DefWindowProcW(window, message, wParam, lParam)
+            : instance->handleMessage(window, message, wParam, lParam);
     } catch (const std::exception&) {
         LogWindowsMessage(
             WindowsLogLevel::Error,
@@ -409,18 +469,26 @@ LRESULT TrayIcon::handleMessage(
     const WPARAM wParam,
     const LPARAM lParam)
 {
-    const UINT notification = LOWORD(lParam);
-    if (message == callbackMessage_
-        && (notification == WM_RBUTTONUP || notification == WM_CONTEXTMENU)) {
-        const auto result = showContextMenu();
-        if (!result.hasValue()) {
-            LogWindowsMessage(
-                WindowsLogLevel::Error,
-                QStringLiteral("Tray menu failed: %1").arg(result.error()));
-        }
+    if (message != callbackMessage_) {
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    const auto notification = Detail::decodeTrayNotification(wParam, lParam, iconId_);
+    if (!notification.has_value()) {
         return 0;
     }
-    return DefWindowProcW(window, message, wParam, lParam);
+
+    const auto anchor = notificationAnchor(
+        notification->point, notification->needsIconRect);
+    const auto result = anchor.hasValue()
+        ? showContextMenu(anchor.value())
+        : Core::Result<void>::failure(anchor.error());
+    if (!result.hasValue()) {
+        LogWindowsMessage(
+            WindowsLogLevel::Error,
+            QStringLiteral("Tray menu failed: %1").arg(result.error()));
+    }
+    return 0;
 }
 
 } // namespace Platform
