@@ -29,6 +29,7 @@ struct TrayIconApi final {
     decltype(&Shell_NotifyIconW) notifyIcon{&Shell_NotifyIconW};
     decltype(&Shell_NotifyIconGetRect) notifyIconRect{&Shell_NotifyIconGetRect};
     decltype(&LoadIconW) loadIcon{&LoadIconW};
+    decltype(&TrackPopupMenu) trackPopupMenu{&TrackPopupMenu};
 };
 
 class TrayIcon final {
@@ -44,7 +45,9 @@ public:
     TrayIcon(TrayIcon&&) = delete;
     TrayIcon& operator=(TrayIcon&&) = delete;
 
-    [[nodiscard]] Core::Result<void> initialize(std::function<void()> quitCallback);
+    [[nodiscard]] Core::Result<void> initialize(
+        UINT taskbarCreatedMessage,
+        std::function<void()> quitCallback);
     [[nodiscard]] Core::Result<void> recoverAfterShellRestart();
     void shutdown() noexcept;
 
@@ -52,6 +55,7 @@ public:
     {
         return taskbarCreatedMessage_;
     }
+    [[nodiscard]] HWND messageWindow() const noexcept { return messageWindow_; }
 
 private:
     [[nodiscard]] Core::Result<void> createMessageWindow();

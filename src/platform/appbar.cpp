@@ -22,6 +22,10 @@ AppBar::~AppBar()
 
 Core::Result<void> AppBar::initialize(const HWND window, const int logicalHeight)
 {
+    if (api_.message == nullptr) {
+        return Core::Result<void>::failure(
+            QStringLiteral("Cannot initialize AppBar: SHAppBarMessage is unavailable"));
+    }
     if (registered_) {
         if (window_ == window && logicalHeight_ == logicalHeight) {
             return Core::Result<void>::success();

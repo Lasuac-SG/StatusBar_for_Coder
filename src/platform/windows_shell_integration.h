@@ -18,6 +18,10 @@ class QObject;
 
 namespace Platform {
 
+struct WindowsShellApi final {
+    decltype(&RegisterWindowMessageW) registerWindowMessage{&RegisterWindowMessageW};
+};
+
 namespace Detail {
 
 class CoalescedCall final {
@@ -59,8 +63,10 @@ class WindowsShellIntegration final : public QAbstractNativeEventFilter {
 public:
     explicit WindowsShellIntegration(
         AppBarApi appBarApi = {},
-        TrayIconApi trayIconApi = {}) noexcept
-        : appBar_(appBarApi)
+        TrayIconApi trayIconApi = {},
+        WindowsShellApi shellApi = {}) noexcept
+        : shellApi_(shellApi)
+        , appBar_(appBarApi)
         , trayIcon_(trayIconApi)
     {
     }
@@ -93,8 +99,10 @@ private:
     void runQueuedReposition(Detail::CoalescedCall::Token token) noexcept;
     void handleFatalAppBarFailure(const QString& context, const QString& error) noexcept;
 
+    WindowsShellApi shellApi_;
     SingleInstance singleInstance_;
     HWND rootWindow_{};
+    UINT taskbarCreatedMessage_{};
     bool installed_{};
     bool fatalExitRequested_{};
     Detail::CoalescedCall deferredReposition_;

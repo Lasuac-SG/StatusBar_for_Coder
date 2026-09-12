@@ -96,12 +96,14 @@ std::optional<Detail::TrayNotification> Detail::decodeTrayNotification(
         return std::nullopt;
     }
 
-    const POINT point{GET_X_LPARAM(packedPoint), GET_Y_LPARAM(packedPoint)};
+    POINT point{};
+    if (notification == WM_RBUTTONUP) {
+        point = {GET_X_LPARAM(packedPoint), GET_Y_LPARAM(packedPoint)};
+    }
     return Detail::TrayNotification{
         notification,
         point,
-        notification == NIN_KEYSELECT
-            || (notification == WM_CONTEXTMENU && point.x == -1 && point.y == -1),
+        notification != WM_RBUTTONUP,
     };
 }
 
@@ -110,22 +112,31 @@ TrayIcon::~TrayIcon()
     shutdown();
 }
 
-Core::Result<void> TrayIcon::initialize(std::function<void()> quitCallback)
+Core::Result<void> TrayIcon::initialize(
+    const UINT taskbarCreatedMessage,
+    std::function<void()> quitCallback)
 {
+    if (api_.notifyIcon == nullptr
+        || api_.notifyIconRect == nullptr
+        || api_.loadIcon == nullptr
+        || api_.trackPopupMenu == nullptr) {
+        return Core::Result<void>::failure(
+            QStringLiteral("Cannot initialize tray icon: required Windows API is unavailable"));
+    }
+    if (taskbarCreatedMessage == 0) {
+        return Core::Result<void>::failure(
+            QStringLiteral("Cannot initialize tray icon without TaskbarCreated"));
+    }
     if (!quitCallback) {
         return Core::Result<void>::failure(
             QStringLiteral("Cannot initialize tray icon without a quit callback"));
     }
-
-    if (taskbarCreatedMessage_ == 0) {
-        SetLastError(ERROR_SUCCESS);
-        taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
-        if (taskbarCreatedMessage_ == 0) {
-            return Core::Result<void>::failure(
-                QStringLiteral("Cannot register TaskbarCreated for tray recovery (Win32 error %1)")
-                    .arg(GetLastError()));
-        }
+    if (taskbarCreatedMessage_ != 0
+        && taskbarCreatedMessage_ != taskbarCreatedMessage) {
+        return Core::Result<void>::failure(
+            QStringLiteral("Cannot change TaskbarCreated for an active tray icon"));
     }
+    taskbarCreatedMessage_ = taskbarCreatedMessage;
     quitCallback_ = std::move(quitCallback);
 
     if (messageWindow_ == nullptr || !IsWindow(messageWindow_)) {
@@ -313,7 +324,7 @@ Core::Result<void> TrayIcon::showContextMenu(const POINT point)
     }
 
     SetLastError(ERROR_SUCCESS);
-    const UINT command = TrackPopupMenu(
+    const UINT command = api_.trackPopupMenu(
         menu.get(),
         TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
         point.x,
@@ -327,6 +338,16 @@ Core::Result<void> TrayIcon::showContextMenu(const POINT point)
     SetLastError(ERROR_SUCCESS);
     const bool posted = PostMessageW(messageWindow_, WM_NULL, 0, 0);
     const DWORD postError = GetLastError();
+
+    auto notification = notificationData(messageWindow_, iconId_);
+    const bool focusRestored = api_.notifyIcon(NIM_SETFOCUS, &notification);
+    const bool earlierFailure = (command == 0 && trackingError != ERROR_SUCCESS)
+        || closeError != ERROR_SUCCESS || !posted;
+    if (!focusRestored && earlierFailure) {
+        LogWindowsMessage(
+            WindowsLogLevel::Error,
+            QStringLiteral("Cannot restore notification-area focus after tray menu"));
+    }
 
     if (command == quitCommand && quitCallback_) {
         quitCallback_();
@@ -345,6 +366,10 @@ Core::Result<void> TrayIcon::showContextMenu(const POINT point)
         return Core::Result<void>::failure(
             QStringLiteral("Cannot finalize tray popup menu (Win32 error %1)")
                 .arg(postError));
+    }
+    if (!focusRestored) {
+        return Core::Result<void>::failure(
+            QStringLiteral("Cannot restore notification-area focus after tray menu"));
     }
     return Core::Result<void>::success();
 }

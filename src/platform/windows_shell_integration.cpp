@@ -40,6 +40,18 @@ Core::Result<void> WindowsShellIntegration::initialize(
         return Core::Result<void>::failure(
             QStringLiteral("Cannot install Windows shell integration without QCoreApplication"));
     }
+    if (shellApi_.registerWindowMessage == nullptr) {
+        return Core::Result<void>::failure(
+            QStringLiteral("Cannot initialize shell integration: RegisterWindowMessageW is unavailable"));
+    }
+
+    SetLastError(ERROR_SUCCESS);
+    const UINT taskbarCreated = shellApi_.registerWindowMessage(L"TaskbarCreated");
+    if (taskbarCreated == 0) {
+        return Core::Result<void>::failure(
+            QStringLiteral("Cannot register TaskbarCreated for shell recovery (Win32 error %1)")
+                .arg(GetLastError()));
+    }
     auto callbackContext = std::make_unique<QObject>();
 
     const auto appBarResult = appBar_.initialize(rootWindow, logicalHeight);
@@ -47,7 +59,9 @@ Core::Result<void> WindowsShellIntegration::initialize(
         return appBarResult;
     }
 
-    const auto trayResult = trayIcon_.initialize(std::move(quitCallback));
+    taskbarCreatedMessage_ = taskbarCreated;
+    const auto trayResult = trayIcon_.initialize(
+        taskbarCreatedMessage_, std::move(quitCallback));
     if (!trayResult.hasValue()) {
         LogWindowsMessage(
             WindowsLogLevel::Warning,
@@ -77,6 +91,7 @@ void WindowsShellIntegration::shutdown() noexcept
         appBar_.shutdown();
         fatalExitRequested_ = false;
         rootWindow_ = nullptr;
+        taskbarCreatedMessage_ = 0;
     } catch (const std::exception&) {
         LogWindowsMessage(
             WindowsLogLevel::Error,
@@ -190,8 +205,8 @@ bool WindowsShellIntegration::nativeEventFilter(
             return false;
         }
 
-        const UINT taskbarCreated = trayIcon_.taskbarCreatedMessage();
-        if (taskbarCreated != 0 && message->message == taskbarCreated) {
+        if (taskbarCreatedMessage_ != 0
+            && message->message == taskbarCreatedMessage_) {
             const auto appBarResult = appBar_.recoverAfterShellRestart();
             if (!appBarResult.hasValue()) {
                 handleFatalAppBarFailure(

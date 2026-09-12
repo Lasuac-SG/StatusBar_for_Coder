@@ -31,11 +31,27 @@ template <typename T, std::size_t Capacity>
 struct CallLog final {
     std::array<T, Capacity> values{};
     std::size_t size{};
+    bool overflowed{};
 
-    void clear() noexcept { size = 0; }
-    void append(const T value) noexcept { values[size++] = value; }
+    void clear() noexcept
+    {
+        size = 0;
+        overflowed = false;
+    }
+
+    void append(const T value) noexcept
+    {
+        if (size < Capacity) {
+            values[size++] = value;
+        } else {
+            overflowed = true;
+        }
+    }
 };
 
+constexpr UINT canonicalTaskbarMessage = 0xC123;
+constexpr UINT trayCallbackMessage = WM_APP + 0x352;
+constexpr UINT quitCommand = 1001;
 CallLog<DWORD, 32> appBarCalls;
 bool failAppBarRegistration{};
 struct TrayCall final {
@@ -49,6 +65,10 @@ struct TrayCall final {
 CallLog<TrayCall, 32> trayCalls;
 DWORD failingTrayCall{};
 int remainingTrayFailures{};
+bool failTaskbarRegistration{};
+int taskbarRegistrationCalls{};
+UINT nextTrayCommand{};
+bool provideTrayRect{};
 
 UINT_PTR WINAPI fakeAppBarMessage(const DWORD message, PAPPBARDATA) noexcept
 {
@@ -72,14 +92,40 @@ BOOL WINAPI fakeNotifyIcon(const DWORD message, PNOTIFYICONDATAW data) noexcept
     return TRUE;
 }
 
-HRESULT WINAPI fakeNotifyIconRect(const NOTIFYICONIDENTIFIER*, RECT*) noexcept
+HRESULT WINAPI fakeNotifyIconRect(const NOTIFYICONIDENTIFIER*, RECT* const rect) noexcept
 {
+    if (provideTrayRect && rect != nullptr) {
+        *rect = RECT{10, 20, 30, 40};
+        return S_OK;
+    }
     return E_FAIL;
 }
 
 HICON WINAPI fakeLoadIcon(HINSTANCE, LPCWSTR) noexcept
 {
     return reinterpret_cast<HICON>(1);
+}
+
+BOOL WINAPI fakeTrackPopupMenu(
+    HMENU,
+    UINT,
+    int,
+    int,
+    int,
+    HWND,
+    const RECT*) noexcept
+{
+    return static_cast<BOOL>(nextTrayCommand);
+}
+
+UINT WINAPI fakeRegisterWindowMessage(LPCWSTR) noexcept
+{
+    ++taskbarRegistrationCalls;
+    if (failTaskbarRegistration) {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return 0;
+    }
+    return canonicalTaskbarMessage;
 }
 
 class NativeWindow final {
@@ -124,7 +170,12 @@ Platform::AppBarApi fakeAppBarApi() noexcept
 
 Platform::TrayIconApi fakeTrayApi() noexcept
 {
-    return {fakeNotifyIcon, fakeNotifyIconRect, fakeLoadIcon};
+    return {fakeNotifyIcon, fakeNotifyIconRect, fakeLoadIcon, fakeTrackPopupMenu};
+}
+
+Platform::WindowsShellApi fakeWindowsShellApi() noexcept
+{
+    return {fakeRegisterWindowMessage};
 }
 
 std::wstring uniqueMutexName(const void* const identity)
@@ -141,25 +192,46 @@ class AppBarGeometryTest final : public QObject {
 
 private slots:
     void initTestCase();
+    void cleanup();
     void inactiveAppBarHasNoCallbackMessage();
     void preservesShellTopAndMonitorWidth();
     void supportsNegativeMonitorOrigin();
     void preservesExactEdgeContract();
     void appBarUsesCompleteProtocol();
     void appBarRecoveryChecksNewRegistration();
+    void appBarRejectsNullApi();
     void shellOwnsSingleInstance();
     void coalescesDeferredCalls();
     void displayChangesAreDeferredAndCoalesced();
     void shutdownCancelsDeferredDisplayChange();
     void decodesVersionFourTrayEvents();
+    void trayRejectsNullApi_data();
+    void trayRejectsNullApi();
     void trayNotificationFailureRemainsRecoverable_data();
     void trayNotificationFailureRemainsRecoverable();
+    void taskbarRegistrationFailureIsFatal();
     void taskbarCreatedRetriesUnavailableTray();
+    void popupRestoresTrayFocusWithoutLosingQuit();
 };
 
 void AppBarGeometryTest::initTestCase()
 {
     QStandardPaths::setTestModeEnabled(true);
+}
+
+void AppBarGeometryTest::cleanup()
+{
+    QVERIFY2(!appBarCalls.overflowed, "AppBar call log overflowed");
+    QVERIFY2(!trayCalls.overflowed, "tray call log overflowed");
+    appBarCalls.clear();
+    trayCalls.clear();
+    failAppBarRegistration = false;
+    failingTrayCall = 0;
+    remainingTrayFailures = 0;
+    failTaskbarRegistration = false;
+    taskbarRegistrationCalls = 0;
+    nextTrayCommand = 0;
+    provideTrayRect = false;
 }
 
 void AppBarGeometryTest::inactiveAppBarHasNoCallbackMessage()
@@ -253,6 +325,18 @@ void AppBarGeometryTest::appBarRecoveryChecksNewRegistration()
     failAppBarRegistration = false;
 }
 
+void AppBarGeometryTest::appBarRejectsNullApi()
+{
+    NativeWindow window;
+    QVERIFY(window.get() != nullptr);
+
+    Platform::AppBar appBar(Platform::AppBarApi{nullptr});
+    QVERIFY(!appBar.initialize(window.get(), 40).hasValue());
+    QCOMPARE(appBar.callbackMessage(), UINT{0});
+    QCOMPARE(appBarCalls.size, std::size_t{0});
+    appBar.shutdown();
+}
+
 void AppBarGeometryTest::shellOwnsSingleInstance()
 {
     const std::wstring name = uniqueMutexName(this);
@@ -291,7 +375,8 @@ void AppBarGeometryTest::displayChangesAreDeferredAndCoalesced()
     failingTrayCall = 0;
     remainingTrayFailures = 0;
 
-    Platform::WindowsShellIntegration shell(fakeAppBarApi(), fakeTrayApi());
+    Platform::WindowsShellIntegration shell(
+        fakeAppBarApi(), fakeTrayApi(), fakeWindowsShellApi());
     QVERIFY(shell.initialize(window.get(), 40, [] {}).hasValue());
     appBarCalls.clear();
 
@@ -338,6 +423,13 @@ void AppBarGeometryTest::decodesVersionFourTrayEvents()
     QVERIFY(keyboard.has_value());
     QVERIFY(keyboard->needsIconRect);
 
+    const auto context = Platform::Detail::decodeTrayNotification(
+        MAKEWPARAM(42, 84), MAKELPARAM(WM_CONTEXTMENU, iconId), iconId);
+    QVERIFY(context.has_value());
+    QVERIFY(context->needsIconRect);
+    QCOMPARE(context->point.x, 0L);
+    QCOMPARE(context->point.y, 0L);
+
     QVERIFY(!Platform::Detail::decodeTrayNotification(
                  0, MAKELPARAM(WM_RBUTTONUP, iconId + 1), iconId)
                  .has_value());
@@ -357,7 +449,8 @@ void AppBarGeometryTest::shutdownCancelsDeferredDisplayChange()
     remainingTrayFailures = 0;
 
     {
-        Platform::WindowsShellIntegration shell(fakeAppBarApi(), fakeTrayApi());
+        Platform::WindowsShellIntegration shell(
+            fakeAppBarApi(), fakeTrayApi(), fakeWindowsShellApi());
         QVERIFY(shell.initialize(window.get(), 40, [] {}).hasValue());
 
         MSG message{};
@@ -370,6 +463,43 @@ void AppBarGeometryTest::shutdownCancelsDeferredDisplayChange()
     appBarCalls.clear();
     QCoreApplication::processEvents();
     QCOMPARE(appBarCalls.size, std::size_t{0});
+}
+
+void AppBarGeometryTest::trayRejectsNullApi_data()
+{
+    QTest::addColumn<int>("missingPointer");
+    QTest::newRow("Shell_NotifyIconW") << 0;
+    QTest::newRow("Shell_NotifyIconGetRect") << 1;
+    QTest::newRow("LoadIconW") << 2;
+    QTest::newRow("TrackPopupMenu") << 3;
+}
+
+void AppBarGeometryTest::trayRejectsNullApi()
+{
+    QFETCH(int, missingPointer);
+    auto api = fakeTrayApi();
+    switch (missingPointer) {
+    case 0:
+        api.notifyIcon = nullptr;
+        break;
+    case 1:
+        api.notifyIconRect = nullptr;
+        break;
+    case 2:
+        api.loadIcon = nullptr;
+        break;
+    case 3:
+        api.trackPopupMenu = nullptr;
+        break;
+    default:
+        QFAIL("Unknown tray API pointer");
+    }
+
+    Platform::TrayIcon tray(api);
+    QVERIFY(!tray.initialize(canonicalTaskbarMessage, [] {}).hasValue());
+    QCOMPARE(tray.taskbarCreatedMessage(), UINT{0});
+    QCOMPARE(trayCalls.size, std::size_t{0});
+    tray.shutdown();
 }
 
 void AppBarGeometryTest::trayNotificationFailureRemainsRecoverable_data()
@@ -387,8 +517,9 @@ void AppBarGeometryTest::trayNotificationFailureRemainsRecoverable()
     remainingTrayFailures = 1;
 
     Platform::TrayIcon tray(fakeTrayApi());
-    QVERIFY(!tray.initialize([] {}).hasValue());
-    QVERIFY(tray.taskbarCreatedMessage() != 0);
+    QVERIFY(!tray.initialize(canonicalTaskbarMessage, [] {}).hasValue());
+    QCOMPARE(tray.taskbarCreatedMessage(), canonicalTaskbarMessage);
+    QVERIFY(trayCalls.size >= 1);
     QCOMPARE(trayCalls.values[0].message, DWORD{NIM_ADD});
     QVERIFY((trayCalls.values[0].flags & NIF_SHOWTIP) != 0);
     QCOMPARE(trayCalls.values[0].iconId, UINT{1});
@@ -396,10 +527,26 @@ void AppBarGeometryTest::trayNotificationFailureRemainsRecoverable()
 
     failingTrayCall = 0;
     QVERIFY(tray.recoverAfterShellRestart().hasValue());
+    QVERIFY(trayCalls.size >= 2);
     QCOMPARE(trayCalls.values[trayCalls.size - 2].message, DWORD{NIM_ADD});
     QCOMPARE(trayCalls.values[trayCalls.size - 1].message, DWORD{NIM_SETVERSION});
     QCOMPARE(trayCalls.values[trayCalls.size - 1].version, UINT{NOTIFYICON_VERSION_4});
     tray.shutdown();
+}
+
+void AppBarGeometryTest::taskbarRegistrationFailureIsFatal()
+{
+    NativeWindow window;
+    QVERIFY(window.get() != nullptr);
+    failTaskbarRegistration = true;
+
+    Platform::WindowsShellIntegration shell(
+        fakeAppBarApi(), fakeTrayApi(), fakeWindowsShellApi());
+    QVERIFY(!shell.initialize(window.get(), 40, [] {}).hasValue());
+    QCOMPARE(taskbarRegistrationCalls, 1);
+    QCOMPARE(appBarCalls.size, std::size_t{0});
+    QCOMPARE(trayCalls.size, std::size_t{0});
+    shell.shutdown();
 }
 
 void AppBarGeometryTest::taskbarCreatedRetriesUnavailableTray()
@@ -412,20 +559,48 @@ void AppBarGeometryTest::taskbarCreatedRetriesUnavailableTray()
     failingTrayCall = NIM_ADD;
     remainingTrayFailures = 1;
 
-    Platform::WindowsShellIntegration shell(fakeAppBarApi(), fakeTrayApi());
+    Platform::WindowsShellIntegration shell(
+        fakeAppBarApi(), fakeTrayApi(), fakeWindowsShellApi());
     QVERIFY(shell.initialize(window.get(), 40, [] {}).hasValue());
+    QCOMPARE(taskbarRegistrationCalls, 1);
     trayCalls.clear();
     failingTrayCall = 0;
 
     MSG message{};
     message.hwnd = window.get();
-    message.message = RegisterWindowMessageW(L"TaskbarCreated");
-    QVERIFY(message.message != 0);
+    message.message = canonicalTaskbarMessage;
     QVERIFY(!shell.nativeEventFilter({}, &message, nullptr));
     QCOMPARE(trayCalls.size, std::size_t{2});
     QCOMPARE(trayCalls.values[0].message, DWORD{NIM_ADD});
     QCOMPARE(trayCalls.values[1].message, DWORD{NIM_SETVERSION});
     shell.shutdown();
+}
+
+void AppBarGeometryTest::popupRestoresTrayFocusWithoutLosingQuit()
+{
+    int quitCalls{};
+    nextTrayCommand = quitCommand;
+    failingTrayCall = NIM_SETFOCUS;
+    remainingTrayFailures = 1;
+    provideTrayRect = true;
+
+    Platform::TrayIcon tray(fakeTrayApi());
+    QVERIFY(tray.initialize(canonicalTaskbarMessage, [&quitCalls] { ++quitCalls; }).hasValue());
+    trayCalls.clear();
+
+    const HWND host = tray.messageWindow();
+    QVERIFY(host != nullptr);
+    SendMessageW(
+        host,
+        trayCallbackMessage,
+        0,
+        MAKELPARAM(WM_CONTEXTMENU, 1));
+
+    QCOMPARE(quitCalls, 1);
+    QCOMPARE(trayCalls.size, std::size_t{1});
+    QCOMPARE(trayCalls.values[0].message, DWORD{NIM_SETFOCUS});
+    QCOMPARE(trayCalls.values[0].iconId, UINT{1});
+    tray.shutdown();
 }
 
 QTEST_GUILESS_MAIN(AppBarGeometryTest)
