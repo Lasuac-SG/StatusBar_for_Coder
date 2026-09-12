@@ -324,14 +324,14 @@ Core::Result<void> TrayIcon::showContextMenu(const POINT point)
     }
 
     SetLastError(ERROR_SUCCESS);
-    const UINT command = api_.trackPopupMenu(
+    const UINT command = static_cast<UINT>(api_.trackPopupMenu(
         menu.get(),
         TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
         point.x,
         point.y,
         0,
         messageWindow_,
-        nullptr);
+        nullptr));
     const DWORD trackingError = GetLastError();
     const DWORD closeError = menu.release();
 

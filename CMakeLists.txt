@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
+if(POLICY CMP0207)
+    cmake_policy(SET CMP0207 NEW)
+endif()
 project(StatusBar_for_Coder VERSION 0.2.0 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -8,6 +11,21 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick)
 qt_standard_project_setup(REQUIRES 6.8)
 include(CTest)
+include(CheckIPOSupported)
+
+function(statusbar_enable_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(${target} PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wsign-conversion
+        )
+    endif()
+endfunction()
 
 if(BUILD_TESTING)
     find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
@@ -108,18 +126,91 @@ target_link_libraries(StatusBar_for_Coder PRIVATE
     statusbar_application StatusBarQml StatusBarQmlplugin
     Qt6::Gui Qt6::Qml Qt6::Quick)
 
-if(MSVC)
-    target_compile_options(statusbar_core PRIVATE /W4 /permissive-)
-    target_compile_options(StatusBarQml PRIVATE /W4 /permissive-)
-    target_compile_options(statusbar_application PRIVATE /W4 /permissive-)
-    target_compile_options(StatusBar_for_Coder PRIVATE /W4 /permissive-)
+foreach(target IN ITEMS
+        statusbar_core
+        statusbar_application
+        StatusBarQml
+        StatusBarQmlplugin
+        StatusBar_for_Coder)
+    statusbar_enable_warnings(${target})
+endforeach()
+
+check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error LANGUAGES CXX)
+if(ipo_supported)
+    set(statusbar_ipo_targets
+        statusbar_core
+        statusbar_application
+        StatusBar_for_Coder
+    )
+    if(NOT MINGW)
+        list(APPEND statusbar_ipo_targets StatusBarQml StatusBarQmlplugin)
+    endif()
+    set_property(TARGET
+        ${statusbar_ipo_targets}
+        PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+    )
 else()
-    target_compile_options(statusbar_core PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(StatusBarQml PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(statusbar_application PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(StatusBar_for_Coder PRIVATE -Wall -Wextra -Wpedantic)
+    message(STATUS "Release IPO/LTO is unavailable: ${ipo_error}")
 endif()
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+
+install(TARGETS StatusBar_for_Coder
+    RUNTIME_DEPENDENCIES
+        DIRECTORIES $<TARGET_FILE_DIR:Qt6::Core>
+        PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
+        POST_EXCLUDE_REGEXES
+            ".*[Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\][Ss][Yy][Ss][Tt][Ee][Mm]32[/\\\\].*"
+            ".*[Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\][Ss][Yy][Ss][Ww][Oo][Ww]64[/\\\\].*"
+    RUNTIME DESTINATION .
+)
+install(CODE [[
+    get_filename_component(CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}" ABSOLUTE)
+    set(QT_DEPLOY_BIN_DIR ".")
+    set(QT_DEPLOY_LIBEXEC_DIR ".")
+    set(QT_DEPLOY_LIB_DIR ".")
+    set(QT_DEPLOY_PLUGINS_DIR "plugins")
+    set(QT_DEPLOY_QML_DIR "qml")
+]])
+qt_generate_deploy_qml_app_script(
+    TARGET StatusBar_for_Coder
+    OUTPUT_SCRIPT deploy_script
+    NO_UNSUPPORTED_PLATFORM_ERROR
+    NO_TRANSLATIONS
+    EXCLUDE_PLUGIN_TYPES
+        generic
+        iconengines
+        networkinformation
+        qmltooling
+        sqldrivers
+        tls
+    EXCLUDE_PLUGINS qgif qico qjpeg
+)
+install(SCRIPT ${deploy_script})
+
+set(statusbar_package_arch "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}")
+if(NOT statusbar_package_arch)
+    set(statusbar_package_arch "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+string(TOLOWER "${statusbar_package_arch}" statusbar_package_arch)
+if(statusbar_package_arch MATCHES "^(amd64|x64)$")
+    set(statusbar_package_arch "x86_64")
+elseif(statusbar_package_arch MATCHES "^(aarch64|arm64ec)$")
+    set(statusbar_package_arch "arm64")
+elseif(NOT statusbar_package_arch)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(statusbar_package_arch "x86_64")
+    else()
+        set(statusbar_package_arch "x86")
+    endif()
+endif()
+set(CPACK_GENERATOR ZIP)
+set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
+set(CPACK_PACKAGE_VENDOR "StatusBarForCoder")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_FILE_NAME
+    "${PROJECT_NAME}-${PROJECT_VERSION}-windows-${statusbar_package_arch}")
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+include(CPack)
