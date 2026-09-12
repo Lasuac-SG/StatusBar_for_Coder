@@ -77,3 +77,17 @@ foreach(scenario IN ITEMS
     set_tests_properties(qt_application_${scenario} PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endforeach()
+
+foreach(test_target IN ITEMS
+        statusbar_smoke_test
+        layout_engine_test
+        appbar_geometry_test
+        config_repository_test
+        cpu_usage_test
+        widget_instances_test
+        widget_registry_test
+        widget_model_test
+        resource_embedding_test
+        qt_application_test)
+    statusbar_enable_warnings(${test_target})
+endforeach()

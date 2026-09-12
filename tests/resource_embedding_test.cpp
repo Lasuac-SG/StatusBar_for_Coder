@@ -401,13 +401,13 @@ private slots:
         QTest::qWait(holdInterval + 500);
         const bool stillPressedAfterHold = interactionArea->property("pressed").toBool();
         const bool editingDuringHold = root->property("isEditing").toBool();
-        const int editingChangesDuringHold = editingChanged.count();
+        const auto editingChangesDuringHold = editingChanged.count();
         QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, holdPosition);
 
         QVERIFY(stillPressedAfterHold);
         QVERIFY(editingDuringHold);
-        QCOMPARE(editingChangesDuringHold, 1);
-        QCOMPARE(editingChanged.count(), 1);
+        QCOMPARE(editingChangesDuringHold, qsizetype{1});
+        QCOMPARE(editingChanged.count(), qsizetype{1});
         QCOMPARE(root->property("isEditing").toBool(), true);
         QCOMPARE(detailLoader->property("active").toBool(), false);
         QCOMPARE(modelChanged.count(), 0);

@@ -126,6 +126,14 @@ target_link_libraries(StatusBar_for_Coder PRIVATE
     statusbar_application StatusBarQml StatusBarQmlplugin
     Qt6::Gui Qt6::Qml Qt6::Quick)
 
+if(MINGW)
+    target_link_options(StatusBar_for_Coder PRIVATE
+        $<$<CONFIG:Release>:-Wl,--no-insert-timestamp>)
+elseif(MSVC)
+    target_link_options(StatusBar_for_Coder PRIVATE
+        $<$<CONFIG:Release>:/Brepro>)
+endif()
+
 foreach(target IN ITEMS
         statusbar_core
         statusbar_application
@@ -137,14 +145,23 @@ endforeach()
 
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error LANGUAGES CXX)
 if(ipo_supported)
+    if(MINGW)
+        # Qt adds -Wa,-mbig-obj to the generated type-registration unit. GCC's
+        # LTO wrapper cannot merge that COFF variant, while non-IPO builds may
+        # still need it for the section-count limit.
+        set_property(SOURCE
+            "${CMAKE_CURRENT_BINARY_DIR}/statusbarqml_qmltyperegistrations.cpp"
+            PROPERTY COMPILE_OPTIONS
+                "$<$<NOT:$<CONFIG:Release>>:-Wa,-mbig-obj>"
+        )
+    endif()
     set(statusbar_ipo_targets
         statusbar_core
         statusbar_application
+        StatusBarQml
+        StatusBarQmlplugin
         StatusBar_for_Coder
     )
-    if(NOT MINGW)
-        list(APPEND statusbar_ipo_targets StatusBarQml StatusBarQmlplugin)
-    endif()
     set_property(TARGET
         ${statusbar_ipo_targets}
         PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
@@ -157,15 +174,7 @@ if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
-install(TARGETS StatusBar_for_Coder
-    RUNTIME_DEPENDENCIES
-        DIRECTORIES $<TARGET_FILE_DIR:Qt6::Core>
-        PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
-        POST_EXCLUDE_REGEXES
-            ".*[Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\][Ss][Yy][Ss][Tt][Ee][Mm]32[/\\\\].*"
-            ".*[Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\][Ss][Yy][Ss][Ww][Oo][Ww]64[/\\\\].*"
-    RUNTIME DESTINATION .
-)
+install(TARGETS StatusBar_for_Coder RUNTIME DESTINATION .)
 install(CODE [[
     get_filename_component(CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}" ABSOLUTE)
     set(QT_DEPLOY_BIN_DIR ".")
@@ -174,37 +183,77 @@ install(CODE [[
     set(QT_DEPLOY_PLUGINS_DIR "plugins")
     set(QT_DEPLOY_QML_DIR "qml")
 ]])
-qt_generate_deploy_qml_app_script(
-    TARGET StatusBar_for_Coder
-    OUTPUT_SCRIPT deploy_script
-    NO_UNSUPPORTED_PLATFORM_ERROR
-    NO_TRANSLATIONS
-    EXCLUDE_PLUGIN_TYPES
-        generic
-        iconengines
-        networkinformation
-        qmltooling
-        sqldrivers
-        tls
-    EXCLUDE_PLUGINS qgif qico qjpeg
-)
+if(Qt6_VERSION VERSION_GREATER_EQUAL 6.10)
+    qt_generate_deploy_qml_app_script(
+        TARGET StatusBar_for_Coder
+        OUTPUT_SCRIPT deploy_script
+        NO_UNSUPPORTED_PLATFORM_ERROR
+        NO_TRANSLATIONS
+        DEPLOY_TOOL_OPTIONS --compiler-runtime
+        EXCLUDE_PLUGIN_TYPES
+            generic
+            iconengines
+            networkinformation
+            qmltooling
+            sqldrivers
+            tls
+        EXCLUDE_PLUGINS qgif qico qjpeg
+    )
+else()
+    qt_generate_deploy_qml_app_script(
+        TARGET StatusBar_for_Coder
+        OUTPUT_SCRIPT deploy_script
+        NO_UNSUPPORTED_PLATFORM_ERROR
+        NO_TRANSLATIONS
+        DEPLOY_TOOL_OPTIONS --compiler-runtime
+    )
+endif()
 install(SCRIPT ${deploy_script})
 
-set(statusbar_package_arch "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}")
-if(NOT statusbar_package_arch)
-    set(statusbar_package_arch "${CMAKE_SYSTEM_PROCESSOR}")
-endif()
-string(TOLOWER "${statusbar_package_arch}" statusbar_package_arch)
-if(statusbar_package_arch MATCHES "^(amd64|x64)$")
-    set(statusbar_package_arch "x86_64")
-elseif(statusbar_package_arch MATCHES "^(aarch64|arm64ec)$")
-    set(statusbar_package_arch "arm64")
-elseif(NOT statusbar_package_arch)
-    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-        set(statusbar_package_arch "x86_64")
-    else()
-        set(statusbar_package_arch "x86")
+if(MINGW)
+    get_target_property(statusbar_qt_core_location
+        Qt6::Core IMPORTED_LOCATION_RELEASE)
+    if(NOT statusbar_qt_core_location)
+        get_target_property(statusbar_qt_core_location
+            Qt6::Core IMPORTED_LOCATION)
     endif()
+    cmake_path(GET statusbar_qt_core_location PARENT_PATH statusbar_qt_bin_dir)
+    configure_file(
+        cmake/DeployMinGWRuntime.cmake.in
+        "${CMAKE_CURRENT_BINARY_DIR}/DeployMinGWRuntime.cmake"
+        @ONLY
+    )
+    install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/DeployMinGWRuntime.cmake")
+endif()
+
+if(Qt6_VERSION VERSION_LESS 6.10)
+    install(CODE [[
+        foreach(plugin_type IN ITEMS
+                generic
+                iconengines
+                networkinformation
+                qmltooling
+                sqldrivers
+                tls)
+            file(REMOVE_RECURSE
+                "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/plugins/${plugin_type}")
+        endforeach()
+        foreach(plugin IN ITEMS qgif.dll qico.dll qjpeg.dll)
+            file(REMOVE
+                "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/plugins/imageformats/${plugin}")
+        endforeach()
+    ]])
+endif()
+
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" statusbar_system_processor)
+if(statusbar_system_processor MATCHES "^(aarch64|arm64|arm64ec)$")
+    set(statusbar_package_arch "arm64")
+elseif(statusbar_system_processor MATCHES "^arm")
+    set(statusbar_package_arch "arm")
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(statusbar_package_arch "x86_64")
+else()
+    set(statusbar_package_arch "x86")
 endif()
 set(CPACK_GENERATOR ZIP)
 set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
@@ -213,4 +262,5 @@ set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_FILE_NAME
     "${PROJECT_NAME}-${PROJECT_VERSION}-windows-${statusbar_package_arch}")
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+set(CPACK_STRIP_FILES TRUE)
 include(CPack)

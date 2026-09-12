@@ -10,11 +10,12 @@
 /install_manifest.txt
 /dist.zip
 /StatusBar_for_Coder-*-windows-*.zip
-*.exe
-*.dll
-*.a
-*.o
-*.obj
+/StatusBar_for_Coder-*-Source.*
+/*.exe
+/*.dll
+/*.a
+/*.o
+/*.obj
 /.cache/
 /.worktrees/
 /CMakeCache.txt
@@ -26,5 +27,5 @@
 
 /.vscode/
 /.idea/
-*.user
+/*.user
 

@@ -7,14 +7,18 @@
 - Windows 10 或 Windows 11。
 - Qt 6.8 或更高版本，包含 Core、Gui、Qml、Quick；运行测试还需要 Qt Test。
 - CMake 3.21 或更高版本、Ninja，以及与所安装 Qt ABI 匹配的 C++20 编译器（MSVC 或 MinGW-w64 GCC/Clang）。
-- `cmake`、`ninja` 和 Qt 工具应可从命令行找到；否则在配置时追加 `-DCMAKE_PREFIX_PATH=C:/Qt/6.8.*/<kit>`。
+- `cmake`、`ninja`、`git` 和 Qt 工具应可从命令行找到。以下 PowerShell 命令会从 `qtpaths6` 自动取得 Qt 安装前缀：
+
+```powershell
+$qtRoot = Split-Path -Parent (Split-Path -Parent (Get-Command qtpaths6).Source)
+```
 
 以下命令均在仓库根目录执行。
 
 ## Debug 构建与测试
 
 ```powershell
-cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON "-DCMAKE_PREFIX_PATH=$qtRoot"
 cmake --build build-debug --parallel
 ctest --test-dir build-debug --output-on-failure
 cmake --build build-debug --target all_qmltyperegistrations
@@ -24,13 +28,14 @@ cmake --build build-debug --target all_qmllint
 ## Release 构建、安装与打包
 
 ```powershell
-cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+$env:SOURCE_DATE_EPOCH = (git show -s --format=%ct HEAD).Trim()
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF "-DCMAKE_PREFIX_PATH=$qtRoot"
 cmake --build build-release --parallel
-cmake --install build-release --prefix package-release
+cmake --install build-release --prefix package-release --strip
 cmake --build build-release --target package
 ```
 
-`package-release/` 是可直接分发的目录，包含 `StatusBar_for_Coder.exe`、所需 Qt 运行库、QML 模块及平台插件。`package` 目标在 `build-release/` 中生成 `StatusBar_for_Coder-0.2.0-windows-<架构>.zip`。部署内容由 Qt 的 QML 导入扫描与 CMake 部署脚本生成，不需要也不应手工复制 DLL。
+`SOURCE_DATE_EPOCH` 固定为当前 Git 提交时间，并由后续构建和 `package` 命令继承，用于生成可比较的发行物。`package-release/` 是可直接分发的精简目录，包含 `StatusBar_for_Coder.exe`、所需 Qt 运行库、QML 模块及平台插件。`package` 目标在 `build-release/` 中生成 `StatusBar_for_Coder-0.2.0-windows-<架构>.zip`。部署内容由 Qt 的 QML 导入扫描与 CMake 部署脚本生成，不需要手工复制 DLL。
 
 ## 配置与迁移
 
@@ -60,7 +65,22 @@ cmake --build build-release --target package
 以类型 `Memory` 为例，需要接入四类制品：
 
 1. C++ ViewModel：新增 `src/widgets/memory/memory_view_model.h` 和 `memory_view_model.cpp`，继承 `Widgets::WidgetViewModel`。每个配置实例保存独立状态；共享采样通过 `WidgetContext` 注入服务，不新增全局单例。
-2. QML 视图：新增 `src/widgets/memory/MemoryWidget.qml`。根项声明 `required property MemoryViewModel viewModel`，并按需声明宿主传入的 `editingWindow`、`editing` 与 `requestEditing` 属性。
+2. QML 视图：新增 `src/widgets/memory/MemoryWidget.qml`。`WidgetHost` 总会通过 `Loader.setSource()` 传入 `viewModel`、`editingWindow`、`editing` 和 `requestEditing`，因此根对象必须完整声明这四个属性；推荐契约如下：
+
+   ```qml
+   import QtQuick
+   import QtQuick.Window
+   import StatusBar
+
+   Item {
+       required property MemoryViewModel viewModel
+       required property Window editingWindow
+       required property bool editing
+       required property var requestEditing
+   }
+   ```
+
+   `viewModel` 必须使用本组件的具体 QML 类型；其余属性即使暂时不用也必须声明，以保持宿主协议稳定。
 3. QML 类型声明：在 `src/ui/qml_types.h` 中使用 `QML_FOREIGN`、`QML_NAMED_ELEMENT(MemoryViewModel)` 和 `QML_UNCREATABLE` 暴露 ViewModel。
 4. Widget 描述符：在 `src/widgets/registry_setup.cpp` 的描述符列表中注册稳定类型 ID、默认跨度、资源 URL `qrc:/qt/qml/StatusBar/MemoryWidget.qml` 和 ViewModel 工厂。这是业务层唯一的 Widget 注册入口。
 
