@@ -1,17 +1,15 @@
 #pragma once
 #include <QAbstractListModel>
 #include <vector>
-#include "src/core/config_manager.h"
-#include "src/ui/viewmodels/i_view_model.h"
 #include <memory>
+#include "src/widgets/i_widget_view_model.h"
 
 namespace UI {
     struct WidgetInstance {
-        std::unique_ptr<IViewModel> vm;
+        std::unique_ptr<Widgets::IWidgetViewModel> vm;
         int slot;
     };
 
-    // 继承 QAbstractListModel 以便 QML 可以直接使用 ListView/Repeater 渲染
     class WidgetModel : public QAbstractListModel {
         Q_OBJECT
     public:
@@ -21,7 +19,7 @@ namespace UI {
             SpanRole
         };
 
-        WidgetModel(QObject* parent = nullptr);
+        explicit WidgetModel(QObject* parent = nullptr);
         
         int rowCount(const QModelIndex& parent = QModelIndex()) const override;
         QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
@@ -30,12 +28,11 @@ namespace UI {
         void loadFromConfig();
         void updateAll();
 
-        // 供 QML 在拖拽松手时调用的方法
-        Q_INVOKABLE void handleWidgetDropped(int draggedIndex, float dropCenterX, float dpiScale, float containerWidth);
+        // 动态接收 QML 实时比例算出的尺寸，实现无损吸附碰撞
+        Q_INVOKABLE void handleWidgetDropped(int draggedIndex, float dropCenterX, float cellWidth, float spacing, float containerWidth);
 
     private:
         void refreshLayoutAndSync();
         std::vector<WidgetInstance> m_instances;
-        int m_maxSlots;
     };
 }

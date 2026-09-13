@@ -1,6 +1,5 @@
 #include "src/platform/appbar_proxy.h"
 #include <shellapi.h>
-#include <iostream>
 
 namespace Platform {
     HWND AppBarProxy::s_proxyHwnd = nullptr;
@@ -34,19 +33,15 @@ namespace Platform {
 
     void AppBarProxy::RegisterAppBar() noexcept {
         if (!s_proxyHwnd) return;
-
         APPBARDATA abd = { sizeof(APPBARDATA), s_proxyHwnd, WM_APPBAR_CALLBACK, ABE_TOP };
         s_isRegistered = SHAppBarMessage(ABM_NEW, &abd);
-        
         SetAppBarPos();
     }
 
     void AppBarProxy::SetAppBarPos() noexcept {
         if (!s_proxyHwnd || !s_isRegistered) return;
-
         APPBARDATA abd = { sizeof(APPBARDATA), s_proxyHwnd, 0, ABE_TOP, {0, 0, (LONG)s_width, (LONG)s_height} };
         SHAppBarMessage(ABM_QUERYPOS, &abd);
-        
         abd.rc.top = 0; 
         abd.rc.bottom = s_height;
         SHAppBarMessage(ABM_SETPOS, &abd);
@@ -67,12 +62,10 @@ namespace Platform {
     LRESULT CALLBACK AppBarProxy::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         if (uMsg == WM_APPBAR_CALLBACK) {
             if (wParam == ABN_POSCHANGED) {
-                // 仅更新坐标，绝不重复调用 ABM_NEW
                 SetAppBarPos();
                 return 0;
             }
         } else if (uMsg == s_taskbarRestartMessage) {
-            // Explorer 崩溃重启时重新注册
             RegisterAppBar();
             return 0;
         }

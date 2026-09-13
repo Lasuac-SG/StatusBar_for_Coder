@@ -1,22 +1,44 @@
 #include "src/ui/qt_window_adapter.h"
-#include "src/ui/clock_adapter.h"
+#include "src/core/window_manager.h"
+#include "src/widgets/clock/clock_adapter.h"
+#include "src/widgets/cpu/cpu_adapter.h"
 #include <QQmlContext>
+#include <QtQml>
+#include <QFont>
+#include <iostream>
 
 namespace UI {
     QtWindowAdapter::QtWindowAdapter(int& argc, char** argv) {
         m_app = std::make_unique<QGuiApplication>(argc, argv);
+
+        QFont defaultFont("Segoe UI");
+        defaultFont.setStyleStrategy(QFont::PreferAntialias);
+        m_app->setFont(defaultFont);
+
+        // 注册全局 Theme 1.0 单例
+        qmlRegisterSingletonType(QUrl(QStringLiteral("qrc:/src/ui/qml/Theme.qml")), "Theme", 1, 0, "Theme");
+
         m_engine = std::make_unique<QQmlApplicationEngine>();
 
         m_widgetModel.loadFromConfig();
 
-        // 注册上下文属性，QML 可直接使用
+        m_engine->rootContext()->setContextProperty("reservedBarHeight", static_cast<int>(Core::WindowManager::LOGICAL_BAR_HEIGHT));
         m_engine->rootContext()->setContextProperty("widgetModel", &m_widgetModel);
-        m_engine->rootContext()->setContextProperty("clockAdapter", &ClockAdapter::GetInstance());
+        m_engine->rootContext()->setContextProperty("clockAdapter", &Widgets::ClockAdapter::GetInstance());
+        m_engine->rootContext()->setContextProperty("cpuAdapter", &Widgets::CpuAdapter::GetInstance());
 
-        const QUrl url(u"qrc:/src/ui/qml/main.qml"_qs);
+        QObject::connect(m_engine.get(), &QQmlApplicationEngine::objectCreated,
+                         m_app.get(), [](QObject *obj, const QUrl &objUrl) {
+            if (!obj) {
+                std::cerr << "[Fatal Error] 无法加载 QML 视图: " 
+                          << objUrl.toString().toStdString() << std::endl;
+            }
+        }, Qt::DirectConnection);
+
+        const QUrl url(QStringLiteral("qrc:/src/ui/qml/main.qml"));
         m_engine->load(url);
 
-        QObject::connect(&m_updateTimer, &QTimer::timeout, [&]() {
+        QObject::connect(&m_updateTimer, &QTimer::timeout, [this]() {
             m_widgetModel.updateAll();
         });
         m_updateTimer.start(1000);
@@ -25,12 +47,8 @@ namespace UI {
     void QtWindowAdapter::Run() {
         m_app->exec();
     }
-    
+
     void QtWindowAdapter::Quit() {
         m_app->quit();
-    }
-
-    void QtWindowAdapter::HideFromAltTabAndTaskbar() {
-        // Qt 在 QML Window 级别通过 flags 控制，无需此处的 Win32 API 介入
     }
 }

@@ -1,0 +1,12 @@
+{
+    "widgets": [
+        {
+            "name": "Clock",
+            "slot": 21
+        },
+        {
+            "name": "Cpu",
+            "slot": 43
+        }
+    ]
+}
