@@ -275,6 +275,16 @@ private slots:
         QCOMPARE(loaded.value().widgets, expected.widgets);
     }
 
+    void defaultOperationsAreNotProcessGlobal()
+    {
+        const auto first = Core::Internal::defaultConfigRepositoryOperations();
+        const auto second = Core::Internal::defaultConfigRepositoryOperations();
+
+        QVERIFY(first);
+        QVERIFY(second);
+        QVERIFY(first != second);
+    }
+
     void preservesUnknownWidgetEntries()
     {
         QTemporaryDir directory;

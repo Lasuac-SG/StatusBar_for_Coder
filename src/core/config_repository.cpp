@@ -519,8 +519,7 @@ namespace Internal {
 
 std::shared_ptr<ConfigRepositoryOperations> defaultConfigRepositoryOperations()
 {
-    static const auto operations = std::make_shared<QtConfigRepositoryOperations>();
-    return operations;
+    return std::make_shared<QtConfigRepositoryOperations>();
 }
 
 ConfigRepository makeConfigRepository(
