@@ -1,0 +1,50 @@
+# MinGW Qt distributions may dynamically link non-Qt libraries that
+# windeployqt does not copy. Resolve only that remaining dependency closure
+# after Qt has selected the application, QML, and plugin binaries.
+if(POLICY CMP0207)
+    cmake_policy(SET CMP0207 NEW)
+endif()
+
+file(GLOB_RECURSE statusbar_deployed_modules
+    LIST_DIRECTORIES FALSE
+    "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/*.dll")
+
+set(statusbar_deploy_prefix "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}")
+file(GET_RUNTIME_DEPENDENCIES
+    EXECUTABLES
+        "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/StatusBar_for_Coder.exe"
+    MODULES ${statusbar_deployed_modules}
+    DIRECTORIES "@statusbar_qt_bin_dir@"
+    RESOLVED_DEPENDENCIES_VAR statusbar_mingw_runtime
+    UNRESOLVED_DEPENDENCIES_VAR statusbar_unresolved_runtime
+    CONFLICTING_DEPENDENCIES_PREFIX statusbar_conflicts
+    PRE_EXCLUDE_REGEXES
+        "^api-ms-.*"
+        "^ext-ms-.*"
+    POST_EXCLUDE_REGEXES
+        ".*[Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\][Ss][Yy][Ss][Tt][Ee][Mm]32[/\\\\].*"
+        ".*[Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\][Ss][Yy][Ss][Ww][Oo][Ww]64[/\\\\].*"
+)
+
+if(statusbar_unresolved_runtime)
+    list(JOIN statusbar_unresolved_runtime ", " statusbar_unresolved_list)
+    message(FATAL_ERROR
+        "Unresolved MinGW deployment dependencies: ${statusbar_unresolved_list}")
+endif()
+
+foreach(runtime_file IN LISTS statusbar_mingw_runtime)
+    cmake_path(GET runtime_file FILENAME runtime_name)
+    cmake_path(IS_PREFIX
+        statusbar_deploy_prefix
+        "${runtime_file}"
+        NORMALIZE
+        statusbar_already_deployed)
+    if(NOT statusbar_already_deployed
+            AND NOT EXISTS "${statusbar_deploy_prefix}/${runtime_name}")
+        file(INSTALL
+            DESTINATION "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}"
+            TYPE SHARED_LIBRARY
+            FILES "${runtime_file}"
+            FOLLOW_SYMLINK_CHAIN)
+    endif()
+endforeach()
