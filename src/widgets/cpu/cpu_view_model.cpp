@@ -57,9 +57,11 @@ void CpuViewModel::syncCurrentFrequency()
 
 void CpuViewModel::syncHistory()
 {
-    if (m_service == nullptr || m_history == m_service->history()) {
+    if (m_service == nullptr) {
         return;
     }
+    // QVariantList is implicitly shared; this is an O(1) snapshot that also
+    // keeps the last sample valid if the injected service is destroyed first.
     m_history = m_service->history();
     emit historyChanged();
 }

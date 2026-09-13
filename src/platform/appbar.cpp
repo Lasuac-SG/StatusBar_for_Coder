@@ -131,6 +131,8 @@ Core::Result<void> AppBar::reposition()
 
     data.rc = topAppBarRect(
         monitorInfo.rcMonitor, data.rc, static_cast<LONG>(physicalHeight));
+    // ABM_SETPOS reports its approved rectangle through data.rc and is documented
+    // to always return TRUE.
     api_.message(ABM_SETPOS, &data);
 
     SetLastError(ERROR_SUCCESS);

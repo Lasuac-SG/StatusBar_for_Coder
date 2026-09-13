@@ -175,6 +175,7 @@ if(BUILD_TESTING)
 endif()
 
 install(TARGETS StatusBar_for_Coder RUNTIME DESTINATION .)
+install(FILES config.json DESTINATION .)
 install(CODE [[
     get_filename_component(CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}" ABSOLUTE)
     set(QT_DEPLOY_BIN_DIR ".")

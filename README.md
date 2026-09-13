@@ -37,6 +37,8 @@ cmake --build build-release --target package
 
 `SOURCE_DATE_EPOCH` 固定为当前 Git 提交时间，并由后续构建和 `package` 命令继承，用于生成可比较的发行物。`package-release/` 是可直接分发的精简目录，包含 `StatusBar_for_Coder.exe`、所需 Qt 运行库、QML 模块及平台插件。`package` 目标在 `build-release/` 中生成 `StatusBar_for_Coder-0.2.0-windows-<架构>.zip`。部署内容由 Qt 的 QML 导入扫描与 CMake 部署脚本生成，不需要手工复制 DLL。
 
+发布包根目录包含默认旧格式 `config.json`，因此全新安装首次启动时也会显示 Clock 与 Cpu；程序会按下述迁移流程将它复制、备份并原子转换到正式配置目录。删除包内模板不会影响已有用户配置。
+
 ## 配置与迁移
 
 程序设置组织名 `StatusBarForCoder`、应用名 `StatusBar_for_Coder`。正式配置是 `QStandardPaths::AppConfigLocation/config.json`；在 Windows 上具体为：
