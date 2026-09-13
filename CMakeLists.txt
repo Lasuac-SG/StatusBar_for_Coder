@@ -205,7 +205,12 @@ else()
         OUTPUT_SCRIPT deploy_script
         NO_UNSUPPORTED_PLATFORM_ERROR
         NO_TRANSLATIONS
-        DEPLOY_TOOL_OPTIONS --compiler-runtime
+        DEPLOY_TOOL_OPTIONS
+            --compiler-runtime
+            --skip-plugin-types
+            generic,iconengines,networkinformation,qmltooling,sqldrivers,tls
+            --exclude-plugins
+            qgif,qico,qjpeg
     )
 endif()
 install(SCRIPT ${deploy_script})
@@ -224,25 +229,6 @@ if(MINGW)
         @ONLY
     )
     install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/DeployMinGWRuntime.cmake")
-endif()
-
-if(Qt6_VERSION VERSION_LESS 6.10)
-    install(CODE [[
-        foreach(plugin_type IN ITEMS
-                generic
-                iconengines
-                networkinformation
-                qmltooling
-                sqldrivers
-                tls)
-            file(REMOVE_RECURSE
-                "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/plugins/${plugin_type}")
-        endforeach()
-        foreach(plugin IN ITEMS qgif.dll qico.dll qjpeg.dll)
-            file(REMOVE
-                "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/plugins/imageformats/${plugin}")
-        endforeach()
-    ]])
 endif()
 
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" statusbar_system_processor)
